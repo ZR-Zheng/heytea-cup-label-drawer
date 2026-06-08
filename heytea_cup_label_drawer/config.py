@@ -28,6 +28,11 @@ class DrawConfig:
     # 0 = 不连接；1 = 保守连接；2 = 推荐；3 以上更激进。
     centerline_bridge_px: int = 2
 
+    # Anime2Sketch 模式：用模型先把彩图/插画转成黑白线稿，再按中心线追踪绘制。
+    anime2sketch_model_path: str = ""
+    anime2sketch_input_size: int = 512
+    anime2sketch_device: str = "auto"
+
     epsilon: float = 0.7
     min_path_len: float = 6.0
     max_paths: int = 30000
