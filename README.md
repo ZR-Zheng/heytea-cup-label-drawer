@@ -5,7 +5,7 @@
 ## 安装
 
 ```powershell
-pip install -e .
+pip install pyautogui opencv-python pillow numpy
 ```
 
 ## 运行
