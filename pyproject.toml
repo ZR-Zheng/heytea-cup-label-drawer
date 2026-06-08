@@ -1,0 +1,21 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "heytea-cup-label-drawer"
+version = "0.1.0"
+description = "喜茶杯贴图片自动手绘工具"
+requires-python = ">=3.10"
+dependencies = [
+    "numpy>=1.24",
+    "opencv-python>=4.8",
+    "Pillow>=10",
+    "PyAutoGUI>=0.9.54",
+]
+
+[project.scripts]
+heytea-cup-label-drawer = "heytea_cup_label_drawer.main:main"
+
+[tool.setuptools.packages.find]
+include = ["heytea_cup_label_drawer*"]

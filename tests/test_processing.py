@@ -1,0 +1,47 @@
+import unittest
+
+from PIL import Image, ImageDraw
+
+from heytea_cup_label_drawer.config import DrawConfig
+from heytea_cup_label_drawer.processing import make_paths, polyline_length
+
+
+def blank_line_art(size=(100, 100)):
+    image = Image.new("RGB", size, "white")
+    return image, ImageDraw.Draw(image)
+
+
+class CenterlineTracingTests(unittest.TestCase):
+    def test_arc_traces_as_one_main_path(self):
+        image, draw = blank_line_art()
+        draw.arc((15, 15, 85, 85), start=20, end=330, fill="black", width=4)
+
+        paths, _ = make_paths(image, DrawConfig(canvas_w=100, canvas_h=100, padding=0))
+
+        self.assertEqual(len(paths), 1)
+        self.assertGreater(polyline_length(paths[0]), 150)
+
+    def test_cross_keeps_two_straight_main_strokes(self):
+        image, draw = blank_line_art()
+        draw.line((10, 50, 90, 50), fill="black", width=5)
+        draw.line((50, 10, 50, 90), fill="black", width=5)
+
+        paths, _ = make_paths(image, DrawConfig(canvas_w=100, canvas_h=100, padding=0))
+
+        self.assertEqual(len(paths), 2)
+        self.assertTrue(all(polyline_length(path) > 70 for path in paths))
+
+    def test_aggressive_bridge_connects_collinear_gap(self):
+        image, draw = blank_line_art()
+        draw.line((10, 50, 45, 50), fill="black", width=4)
+        draw.line((55, 50, 90, 50), fill="black", width=4)
+
+        config = DrawConfig(canvas_w=100, canvas_h=100, padding=0, centerline_bridge_px=4)
+        paths, _ = make_paths(image, config)
+
+        self.assertEqual(len(paths), 1)
+        self.assertGreater(polyline_length(paths[0]), 70)
+
+
+if __name__ == "__main__":
+    unittest.main()
