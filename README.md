@@ -5,7 +5,7 @@
 ## 安装
 
 ```powershell
-pip install -e .
+pip install pyautogui opencv-python pillow numpy
 ```
 
 如需使用“动漫线稿(Anime2Sketch)”模式，需要额外安装 PyTorch：
