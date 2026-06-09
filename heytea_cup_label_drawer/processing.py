@@ -4,6 +4,7 @@ import cv2
 import numpy as np
 from PIL import Image, ImageOps
 
+from .anime2sketch import anime2sketch_to_gray
 from .config import DrawConfig
 
 
@@ -55,6 +56,16 @@ def make_paths(original_image: Image.Image | None, c: DrawConfig, should_stop=No
 
     if c.method == "中心线追踪(线稿)":
         return make_centerline_paths(gray, c)
+
+    if c.method == "动漫线稿(Anime2Sketch)":
+        lineart = anime2sketch_to_gray(
+            rgb,
+            c.anime2sketch_model_path,
+            c.anime2sketch_input_size,
+            c.anime2sketch_device,
+        )
+        model_config = DrawConfig(**{**c.__dict__, "dark_as_line": True})
+        return make_centerline_paths(lineart, model_config)
 
     if c.method == "逐行扫描(横向)":
         return make_raster_paths(gray, c, should_stop=should_stop)

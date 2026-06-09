@@ -42,6 +42,13 @@ class CenterlineTracingTests(unittest.TestCase):
         self.assertEqual(len(paths), 1)
         self.assertGreater(polyline_length(paths[0]), 70)
 
+    def test_anime2sketch_requires_model_path_before_torch(self):
+        image, _ = blank_line_art()
+        config = DrawConfig(canvas_w=100, canvas_h=100, padding=0, method="动漫线稿(Anime2Sketch)")
+
+        with self.assertRaisesRegex(RuntimeError, "Anime2Sketch 模型权重文件"):
+            make_paths(image, config)
+
 
 if __name__ == "__main__":
     unittest.main()
