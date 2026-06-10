@@ -47,7 +47,7 @@ def _get_model(torch, nn, f, path: Path, device):
     key = (str(path.resolve()), str(device))
     if key in _MODEL_CACHE:
         return _MODEL_CACHE[key]
-    model = _build_line_extractor(nn, f)
+    model = _build_line_extractor(torch, nn, f)
     try:
         state = torch.load(str(path), map_location=device, weights_only=True)
     except TypeError:
@@ -60,12 +60,12 @@ def _get_model(torch, nn, f, path: Path, device):
     return model
 
 
-def _build_line_extractor(nn, f):
+def _build_line_extractor(torch, nn, f):
     class DoubleConv(nn.Module):
         def __init__(self, in_channels, out_channels, mid_channels=None):
             super().__init__()
             mid_channels = mid_channels or out_channels
-            self.layers = nn.Sequential(
+            self.double_conv = nn.Sequential(
                 nn.Conv2d(in_channels, mid_channels, 3, padding=1, bias=False),
                 nn.BatchNorm2d(mid_channels),
                 nn.ReLU(inplace=True),
@@ -75,15 +75,15 @@ def _build_line_extractor(nn, f):
             )
 
         def forward(self, x):
-            return self.layers(x)
+            return self.double_conv(x)
 
     class Down(nn.Module):
         def __init__(self, in_channels, out_channels):
             super().__init__()
-            self.layers = nn.Sequential(nn.MaxPool2d(2), DoubleConv(in_channels, out_channels))
+            self.maxpool_conv = nn.Sequential(nn.MaxPool2d(2), DoubleConv(in_channels, out_channels))
 
         def forward(self, x):
-            return self.layers(x)
+            return self.maxpool_conv(x)
 
     class Up(nn.Module):
         def __init__(self, in_channels, out_channels):
@@ -105,7 +105,7 @@ def _build_line_extractor(nn, f):
             self.down3, self.down4 = Down(256, 512), Down(512, 512)
             self.up1, self.up2 = Up(1024, 256), Up(512, 128)
             self.up3, self.up4 = Up(256, 64), Up(128, 64)
-            self.outc = nn.Conv2d(64, 1, 1)
+            self.outc = OutConv(64, 1)
 
         def forward(self, x):
             x1 = self.inc(x)
@@ -114,5 +114,13 @@ def _build_line_extractor(nn, f):
             x4 = self.down3(x3)
             x5 = self.down4(x4)
             return self.outc(self.up4(self.up3(self.up2(self.up1(x5, x4), x3), x2), x1))
+
+    class OutConv(nn.Module):
+        def __init__(self, in_channels, out_channels):
+            super().__init__()
+            self.conv = nn.Conv2d(in_channels, out_channels, 1)
+
+        def forward(self, x):
+            return self.conv(x)
 
     return LineExtractor()

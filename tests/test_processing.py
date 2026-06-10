@@ -2,7 +2,7 @@ import unittest
 
 from PIL import Image, ImageDraw
 
-from heytea_cup_label_drawer.config import DrawConfig
+from heytea_cup_label_drawer.config import ANILINES_MODELS_DIR, INFORMATIVE_DRAWINGS_MODELS_DIR, DrawConfig
 from heytea_cup_label_drawer.processing import make_paths, polyline_length
 
 
@@ -62,6 +62,42 @@ class CenterlineTracingTests(unittest.TestCase):
 
         with self.assertRaisesRegex(RuntimeError, "Informative Drawings ONNX"):
             make_paths(image, config)
+
+    @unittest.skipUnless((ANILINES_MODELS_DIR / "detail.pth").exists(), "AniLines test model is not installed")
+    def test_anilines_model_runs(self):
+        image, _ = blank_line_art((128, 128))
+        config = DrawConfig(
+            canvas_w=128,
+            canvas_h=128,
+            padding=0,
+            method="动漫精细线稿(AniLines)",
+            anilines_model_path=str(ANILINES_MODELS_DIR / "detail.pth"),
+            anime2sketch_input_size=128,
+            anime2sketch_device="cpu",
+        )
+
+        paths, preview = make_paths(image, config)
+
+        self.assertEqual(preview.shape, (128, 128))
+        self.assertIsInstance(paths, list)
+
+    @unittest.skipUnless((INFORMATIVE_DRAWINGS_MODELS_DIR / "model.onnx").exists(), "Informative Drawings test model is not installed")
+    def test_informative_drawings_model_runs(self):
+        image, _ = blank_line_art((128, 128))
+        config = DrawConfig(
+            canvas_w=128,
+            canvas_h=128,
+            padding=0,
+            method="通用语义线稿(Informative Drawings)",
+            informative_drawings_model_path=str(INFORMATIVE_DRAWINGS_MODELS_DIR / "model.onnx"),
+            anime2sketch_input_size=128,
+            anime2sketch_device="cpu",
+        )
+
+        paths, preview = make_paths(image, config)
+
+        self.assertEqual(preview.shape, (128, 128))
+        self.assertIsInstance(paths, list)
 
 
 if __name__ == "__main__":
