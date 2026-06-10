@@ -17,6 +17,105 @@ from .config import APP_DIR, DEFAULT_CONFIG_PATH, DrawConfig
 from .processing import flatten_image, make_paths
 
 
+PARAMETER_HELP = {
+    "左上角 X": "画布左上角相对于屏幕左侧的像素坐标。建议使用“记录左上角”自动填写。",
+    "左上角 Y": "画布左上角相对于屏幕顶部的像素坐标。建议使用“记录左上角”自动填写。",
+    "宽度 W": "可绘制画布的宽度，单位为屏幕像素。记录右下角时会自动计算。",
+    "高度 H": "可绘制画布的高度，单位为屏幕像素。记录右下角时会自动计算。",
+    "绘图内边距": "在画布四周保留的空白像素。增大可避免笔画贴近边缘或超出画布。",
+    "模糊强度": "预处理时使用的模糊核大小。可填 0、1、3、5、7 或 9；数值越大，细节越少、线条越平滑。",
+    "黑白阈值": "区分线条与背景的灰度界线，范围 0~255。值越大，更多较浅区域会被识别为深色线条。",
+    "断线连接像素": "尝试连接相距较近的断点。建议 1~2；过大可能把相邻线条错误连接。",
+    "模型权重文件": "Anime2Sketch 使用的模型权重文件，支持 netG.pth 或 improved.bin。",
+    "模型输入尺寸": "送入 Anime2Sketch 模型的正方形边长。推荐 512；越大细节越多，但处理更慢、占用内存更多。",
+    "运行设备": "Anime2Sketch 推理设备。auto 自动选择，cpu 使用处理器，cuda 使用 NVIDIA 显卡。",
+    "低阈值": "Canny 边缘检测的低阈值。降低会保留更多弱边缘，也可能引入噪点。",
+    "高阈值": "Canny 边缘检测的高阈值，必须高于低阈值。提高会只保留更明显的边缘。",
+    "简化 epsilon": "折线路径简化强度。值越大，路径点越少、绘制更快，但曲线细节也会减少。",
+    "最短路径长度": "短于该长度的碎线将被忽略。提高可减少杂点和无意义短笔画。",
+    "最多路径数": "限制最终生成的路径数量，防止复杂图片产生过多笔画和过长绘制时间。",
+    "点采样步长": "沿路径每隔多少个点取一个绘制点。提高可加快绘制，但线条可能不够平滑。",
+    "扫描行距": "逐行扫描时相邻横线的垂直间距。值越小填充越密、耗时越长。",
+    "最短横线长度": "短于该长度的扫描横线会被忽略，用于减少零碎小笔画。",
+    "断点合并容差": "同一扫描行内，间隔不超过该像素数的线段会被合并。",
+    "左右延长像素": "将每条扫描横线向左右延长的像素数，可减少填充边缘出现空隙。",
+    "最多横线数": "限制逐行扫描生成的横线数量，防止绘制耗时过长。",
+    "鼠标插值步距 px": "鼠标移动时相邻插值点的最大像素距离。值越小越平滑稳定，但绘制更慢。",
+    "插值点等待秒": "鼠标移动到每个插值点后的最短等待时间。增大可提高稳定性，但会减慢绘制。",
+    "每笔最短秒数": "每一笔至少持续的时间。适当增大可降低短笔画未被画布识别的概率。",
+    "每 100px 秒数": "每绘制 100 屏幕像素使用的时间。增大可减少长线断笔，但整体更慢。",
+    "落笔前停顿秒": "移动到笔画起点后、按下鼠标前等待的时间。",
+    "按下后停顿秒": "按下鼠标后、开始移动前等待的时间。增大可减少起笔丢失。",
+    "落笔预热像素": "按下鼠标后在起点附近往返移动的距离，用于帮助画布识别落笔。",
+    "抬笔前停顿秒": "到达笔画终点后、释放鼠标前等待的时间。增大可减少末端缺失。",
+    "笔画间隔秒": "完成一笔后到开始下一笔之间的等待时间。",
+    "开始前倒计时秒": "点击开始绘制或测试框后预留的切换窗口时间。",
+    "测试框内边距": "测试框与已标定画布边缘之间保留的像素距离。",
+    "保持图片比例并居中": "缩放图片时保持原始宽高比，并将内容放在画布中央，避免图像被拉伸。",
+    "深色区域作为线条": "启用后将比阈值更暗的区域识别为线条；关闭后则识别较亮区域。",
+    "反向补笔（防空笔，更慢）": "中心线路径完成后沿原路反向再画一次，可降低空笔概率，但绘制时间接近翻倍。",
+    "蛇形顺序减少空移": "让相邻扫描行交替从左向右和从右向左绘制，减少鼠标在行间空移。",
+    "横线往返补笔（更黑更慢）": "每条扫描横线完成后沿原路返回，可让填充更深，但绘制时间更长。",
+    "绘制时最小化本窗口": "开始正式绘制时自动最小化工具窗口，结束后恢复，避免遮挡目标画布。",
+}
+
+
+class HoverTip:
+    """在鼠标悬浮于控件时显示简短说明。"""
+
+    def __init__(self, widget: tk.Widget, text: str, delay_ms: int = 450):
+        self.widget = widget
+        self.text = text
+        self.delay_ms = delay_ms
+        self.after_id: str | None = None
+        self.tip_window: tk.Toplevel | None = None
+        widget.bind("<Enter>", self._schedule, add="+")
+        widget.bind("<Leave>", self.hide, add="+")
+        widget.bind("<ButtonPress>", self.hide, add="+")
+        widget.bind("<Destroy>", self.hide, add="+")
+
+    def _schedule(self, _event=None):
+        self.hide()
+        self.after_id = self.widget.after(self.delay_ms, self.show)
+
+    def show(self):
+        self.after_id = None
+        if self.tip_window is not None or not self.widget.winfo_exists():
+            return
+
+        tip = tk.Toplevel(self.widget)
+        tip.wm_overrideredirect(True)
+        tip.wm_attributes("-topmost", True)
+        tk.Label(
+            tip,
+            text=self.text,
+            justify=tk.LEFT,
+            wraplength=320,
+            bg="#172033",
+            fg="#f8fafc",
+            relief=tk.SOLID,
+            borderwidth=1,
+            font=("Microsoft YaHei UI", 9),
+            padx=10,
+            pady=7,
+        ).pack()
+        tip.update_idletasks()
+        x = self.widget.winfo_rootx() + 12
+        y = self.widget.winfo_rooty() + self.widget.winfo_height() + 6
+        x = min(x, self.widget.winfo_screenwidth() - tip.winfo_reqwidth() - 8)
+        y = min(y, self.widget.winfo_screenheight() - tip.winfo_reqheight() - 8)
+        tip.wm_geometry(f"+{max(8, x)}+{max(8, y)}")
+        self.tip_window = tip
+
+    def hide(self, _event=None):
+        if self.after_id is not None:
+            self.widget.after_cancel(self.after_id)
+            self.after_id = None
+        if self.tip_window is not None:
+            self.tip_window.destroy()
+            self.tip_window = None
+
+
 # Windows 高 DPI 下让屏幕坐标更接近真实像素，避免 125%/150% 缩放导致偏移。
 try:
     import ctypes
@@ -44,21 +143,251 @@ class HeyTeaCupLabelDrawerGUI:
         self.stop_event = threading.Event()
         self.worker_thread: threading.Thread | None = None
         self.calib_top_left: tuple[int, int] | None = None
+        self.parameter_tips: list[HoverTip] = []
 
         self._build_ui()
         self.load_config(silent=True)
         self._sync_config_to_vars()
         self.method_var.trace_add("write", lambda *_: self._update_param_visibility())
         self._update_param_visibility()
-        self._log("先在电脑版微信中手动进入杯贴画布，再选择图片、标定画布、测试框、开始绘制。")
-        self._log("紧急停止：把鼠标移到屏幕左上角，或点击“停止绘制”。")
-        self._log("当前版本已优化断笔：横线延长、方向桥接、角度感知追踪、落笔预热、反向补笔、鼠标插值移动。")
-        self._log("黑色线稿推荐使用“中心线追踪(线稿)”：新版会在分叉点按笔画方向延续，减少碎路径。")
-        self._log("彩色动漫/插画可切换到“动漫线稿(Anime2Sketch)”，并选择 netG.pth 或 improved.bin 权重。")
-        self._log("如果中心线追踪仍断笔或需要填充感，可以切换到“逐行扫描(横向)”。")
+        self._log("准备就绪。先选择图片并标定画布，再刷新预览。")
+        self._log("紧急停止：把鼠标移到屏幕左上角，或点击顶部“停止”。")
 
     # ---------- UI ----------
     def _build_ui(self):
+        self._init_ui_vars()
+        self._configure_style()
+        self.root.configure(bg="#f3f5f8")
+
+        app = ttk.Frame(self.root, style="App.TFrame", padding=16)
+        app.pack(fill=tk.BOTH, expand=True)
+
+        header = ttk.Frame(app, style="Header.TFrame", padding=(18, 14))
+        header.pack(fill=tk.X, pady=(0, 12))
+
+        title_block = ttk.Frame(header, style="Header.TFrame")
+        title_block.pack(side=tk.LEFT, fill=tk.Y)
+        ttk.Label(title_block, text="喜茶杯贴自动手绘", style="HeaderTitle.TLabel").pack(anchor="w")
+        ttk.Label(title_block, text="选择图片  ·  标定画布  ·  调整线稿  ·  开始绘制", style="HeaderSubtle.TLabel").pack(anchor="w", pady=(3, 0))
+
+        header_actions = ttk.Frame(header, style="Header.TFrame")
+        header_actions.pack(side=tk.RIGHT)
+        self._add_buttons(
+            header_actions,
+            [
+                ("选择图片", self.choose_image, "Toolbar.TButton"),
+                ("刷新预览", self.refresh_preview, "Toolbar.TButton"),
+                ("开始绘制", self.start_drawing, "Primary.TButton"),
+                ("停止", self.stop_drawing, "Danger.TButton"),
+            ],
+            horizontal=True,
+        )
+
+        body = ttk.Frame(app, style="App.TFrame")
+        body.pack(fill=tk.BOTH, expand=True)
+
+        shell = ttk.Frame(body, style="Card.TFrame")
+        shell.pack(side=tk.LEFT, fill=tk.Y, padx=(0, 12))
+
+        nav = ttk.Frame(shell, style="Nav.TFrame", padding=(10, 12))
+        nav.pack(side=tk.LEFT, fill=tk.Y)
+        settings_host = ttk.Frame(shell, style="Card.TFrame", padding=12, width=390)
+        settings_host.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        settings_host.pack_propagate(False)
+
+        right = ttk.Frame(body, style="App.TFrame")
+        right.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+
+        self.settings_pages: dict[str, ttk.Frame] = {}
+        self.nav_buttons: dict[str, ttk.Button] = {}
+        self.param_sections: dict[str, ttk.LabelFrame] = {}
+
+        prepare_tab = self._create_scroll_page(settings_host, "准备")
+        lineart_tab = self._create_scroll_page(settings_host, "线稿")
+        draw_tab = self._create_scroll_page(settings_host, "绘制")
+        advanced_tab = self._create_scroll_page(settings_host, "高级")
+        for key in ("准备", "线稿", "绘制", "高级"):
+            self._add_nav_button(nav, key)
+        self._show_settings_page("准备")
+
+        image_group = ttk.LabelFrame(prepare_tab, text="当前图片")
+        image_group.pack(fill=tk.X, pady=(0, 10))
+        ttk.Label(image_group, textvariable=self.image_label_var, wraplength=340, style="Value.TLabel").pack(fill=tk.X, padx=10, pady=10)
+
+        canvas_group = ttk.LabelFrame(prepare_tab, text="画布区域")
+        canvas_group.pack(fill=tk.X, pady=(0, 10))
+        self._add_entry_specs(
+            canvas_group,
+            [
+                ("左上角 X", self.canvas_x_var),
+                ("左上角 Y", self.canvas_y_var),
+                ("宽度 W", self.canvas_w_var),
+                ("高度 H", self.canvas_h_var),
+                ("绘图内边距", self.padding_var),
+            ],
+        )
+
+        calibrate_group = ttk.LabelFrame(prepare_tab, text="快速标定")
+        calibrate_group.pack(fill=tk.X, pady=(0, 10))
+        ttk.Label(
+            calibrate_group,
+            text="依次记录画布左上角和右下角，随后用测试框确认位置。",
+            style="Hint.TLabel",
+            wraplength=340,
+        ).pack(anchor="w", padx=10, pady=(8, 4))
+        self._add_buttons(
+            calibrate_group,
+            [
+                ("记录左上角", lambda: self.start_calibration("tl"), None),
+                ("记录右下角", lambda: self.start_calibration("br"), None),
+                ("绘制测试框", self.start_test_rectangle, "Accent.TButton"),
+            ],
+        )
+
+        self.section_image_common = self._create_param_section(prepare_tab, "图片适配")
+        self.section_image_common.pack(fill=tk.X, pady=(0, 10))
+        self._add_labeled_entry(self.section_image_common, "模糊强度", self.blur_var)
+        self._add_checkbutton(self.section_image_common, "保持图片比例并居中", self.keep_aspect_var, pady=(3, 9))
+
+        method_group = ttk.LabelFrame(lineart_tab, text="处理方式")
+        method_group.pack(fill=tk.X, pady=(0, 10))
+        self.method_combo = ttk.Combobox(
+            method_group,
+            textvariable=self.method_var,
+            state="readonly",
+            values=("中心线追踪(线稿)", "动漫线稿(Anime2Sketch)", "逐行扫描(横向)", "边缘线稿(Canny)", "黑白轮廓(阈值)"),
+        )
+        self.method_combo.pack(fill=tk.X, padx=10, pady=(9, 5))
+        self.method_combo.bind("<<ComboboxSelected>>", lambda _e: self._update_param_visibility())
+        ttk.Button(method_group, text="恢复当前模式推荐参数", command=self.reset_current_mode_defaults).pack(fill=tk.X, padx=10, pady=(0, 5))
+        self.method_hint_var = tk.StringVar(value="")
+        ttk.Label(method_group, textvariable=self.method_hint_var, style="Hint.TLabel", wraplength=340).pack(anchor="w", padx=10, pady=(2, 9))
+
+        self.dynamic_param_frame = ttk.Frame(lineart_tab)
+        self.dynamic_param_frame.pack(fill=tk.X)
+
+        self.section_binary = self._create_param_section(self.dynamic_param_frame, "黑白提取")
+        self._add_labeled_entry(self.section_binary, "黑白阈值", self.threshold_var)
+        self._add_checkbutton(self.section_binary, "深色区域作为线条", self.dark_as_line_var, pady=(3, 9))
+
+        self.section_centerline = self._create_param_section(self.dynamic_param_frame, "中心线追踪")
+        self._add_labeled_entry(self.section_centerline, "断线连接像素", self.centerline_bridge_px_var)
+        ttk.Label(self.section_centerline, text="建议 1~2；数值越大越容易连接相邻线条。", style="Hint.TLabel", wraplength=340).pack(anchor="w", padx=10, pady=(2, 5))
+        self._add_checkbutton(self.section_centerline, "反向补笔（防空笔，更慢）", self.centerline_retrace_var, pady=(2, 9))
+
+        self.section_anime2sketch = self._create_param_section(self.dynamic_param_frame, "Anime2Sketch 模型")
+        self._add_model_path_entry(self.section_anime2sketch)
+        self._add_entry_specs(
+            self.section_anime2sketch,
+            [
+                ("模型输入尺寸", self.anime2sketch_input_size_var),
+                ("运行设备", self.anime2sketch_device_var),
+            ],
+        )
+        ttk.Label(self.section_anime2sketch, text="运行设备可填写 auto、cpu 或 cuda。", style="Hint.TLabel").pack(anchor="w", padx=10, pady=(2, 9))
+
+        self.section_canny = self._create_param_section(self.dynamic_param_frame, "Canny 边缘")
+        self._add_entry_specs(
+            self.section_canny,
+            [
+                ("低阈值", self.canny_low_var),
+                ("高阈值", self.canny_high_var),
+            ],
+        )
+
+        self.section_path = self._create_param_section(self.dynamic_param_frame, "路径优化")
+        self._add_entry_specs(
+            self.section_path,
+            [
+                ("简化 epsilon", self.epsilon_var),
+                ("最短路径长度", self.min_path_len_var),
+                ("最多路径数", self.max_paths_var),
+                ("点采样步长", self.point_step_var),
+            ],
+        )
+
+        self.section_raster = self._create_param_section(self.dynamic_param_frame, "逐行扫描")
+        self._add_entry_specs(
+            self.section_raster,
+            [
+                ("扫描行距", self.raster_row_step_var),
+                ("最短横线长度", self.raster_min_run_var),
+                ("断点合并容差", self.raster_gap_tolerance_var),
+                ("左右延长像素", self.raster_extend_px_var),
+                ("最多横线数", self.max_paths_var),
+            ],
+        )
+        self._add_checkbutton(self.section_raster, "蛇形顺序减少空移", self.raster_serpentine_var, pady=2)
+        self._add_checkbutton(self.section_raster, "横线往返补笔（更黑更慢）", self.raster_backtrack_var, pady=(2, 9))
+
+        self.section_stability = self._create_param_section(draw_tab, "绘制稳定性")
+        self.section_stability.pack(fill=tk.X, pady=(0, 10))
+        self._add_entry_specs(
+            self.section_stability,
+            [
+                ("鼠标插值步距 px", self.mouse_step_px_var),
+                ("插值点等待秒", self.move_duration_var),
+                ("每笔最短秒数", self.min_stroke_duration_var),
+                ("每 100px 秒数", self.stroke_duration_per_100px_var),
+                ("落笔前停顿秒", self.pre_down_pause_var),
+                ("按下后停顿秒", self.pen_down_pause_var),
+                ("落笔预热像素", self.pen_down_nudge_px_var),
+                ("抬笔前停顿秒", self.pen_up_pause_var),
+                ("笔画间隔秒", self.between_strokes_pause_var),
+            ],
+        )
+
+        self.section_misc = self._create_param_section(advanced_tab, "运行设置")
+        self.section_misc.pack(fill=tk.X, pady=(0, 10))
+        self._add_entry_specs(
+            self.section_misc,
+            [
+                ("开始前倒计时秒", self.start_delay_var),
+                ("测试框内边距", self.test_padding_var),
+            ],
+        )
+        self._add_checkbutton(self.section_misc, "绘制时最小化本窗口", self.minimize_var, pady=(3, 9))
+
+        config_group = ttk.LabelFrame(advanced_tab, text="配置文件")
+        config_group.pack(fill=tk.X, pady=(0, 10))
+        self._add_buttons(
+            config_group,
+            [
+                ("保存当前配置", self.save_config, "Accent.TButton"),
+                ("重新加载配置", lambda: self.load_config(silent=False), None),
+            ],
+        )
+
+        preview_group = ttk.Frame(right, style="Card.TFrame", padding=12)
+        preview_group.pack(fill=tk.BOTH, expand=True, pady=(0, 12))
+
+        preview_header = ttk.Frame(preview_group, style="Card.TFrame")
+        preview_header.pack(fill=tk.X, pady=(0, 10))
+        ttk.Label(preview_header, text="预览", style="SectionTitle.TLabel").pack(side=tk.LEFT)
+        ttk.Label(preview_header, textvariable=self.path_count_var, style="Status.TLabel").pack(side=tk.RIGHT)
+
+        previews = ttk.PanedWindow(preview_group, orient=tk.HORIZONTAL)
+        previews.pack(fill=tk.BOTH, expand=True)
+        self.original_preview_label = self._create_preview_card(previews, "原图", "选择图片后显示")
+        self.processed_preview_label = self._create_preview_card(previews, "线稿", "刷新预览后显示")
+
+        log_group = ttk.Frame(right, style="Card.TFrame", padding=12)
+        log_group.pack(fill=tk.BOTH, expand=False)
+        log_header = ttk.Frame(log_group, style="Card.TFrame")
+        log_header.pack(fill=tk.X, pady=(0, 8))
+        ttk.Label(log_header, text="运行记录", style="SectionTitle.TLabel").pack(side=tk.LEFT)
+        ttk.Button(log_header, text="清空", style="Link.TButton", command=self._clear_log).pack(side=tk.RIGHT)
+
+        log_body = ttk.Frame(log_group, style="Card.TFrame")
+        log_body.pack(fill=tk.BOTH, expand=True)
+        self.log_text = tk.Text(log_body, height=7, wrap="word", bg="#111827", fg="#e5e7eb", insertbackground="#e5e7eb", relief=tk.FLAT, padx=10, pady=8)
+        self.log_text.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        log_scroll = ttk.Scrollbar(log_body, command=self.log_text.yview)
+        log_scroll.pack(side=tk.LEFT, fill=tk.Y)
+        self.log_text.configure(yscrollcommand=log_scroll.set)
+        self.refresh_anime2sketch_models(silent=True)
+
+    def _init_ui_vars(self):
         self.canvas_x_var = tk.StringVar()
         self.canvas_y_var = tk.StringVar()
         self.canvas_w_var = tk.StringVar()
@@ -102,193 +431,6 @@ class HeyTeaCupLabelDrawerGUI:
         self.image_label_var = tk.StringVar(value="未选择图片")
         self.path_count_var = tk.StringVar(value="未生成路径")
 
-        self._configure_style()
-        self.root.configure(bg="#eef2f7")
-
-        app = ttk.Frame(self.root, style="App.TFrame", padding=14)
-        app.pack(fill=tk.BOTH, expand=True)
-
-        header = ttk.Frame(app, style="Header.TFrame", padding=(16, 12))
-        header.pack(fill=tk.X, pady=(0, 12))
-
-        title_block = ttk.Frame(header, style="Header.TFrame")
-        title_block.pack(side=tk.LEFT, fill=tk.Y)
-        ttk.Label(title_block, text="喜茶杯贴自动手绘工具", style="HeaderTitle.TLabel").pack(anchor="w")
-        ttk.Label(title_block, textvariable=self.path_count_var, style="HeaderSubtle.TLabel").pack(anchor="w", pady=(3, 0))
-
-        header_actions = ttk.Frame(header, style="Header.TFrame")
-        header_actions.pack(side=tk.RIGHT)
-        ttk.Button(header_actions, text="选择图片", style="Toolbar.TButton", command=self.choose_image).pack(side=tk.LEFT, padx=(0, 6))
-        ttk.Button(header_actions, text="刷新预览", style="Toolbar.TButton", command=self.refresh_preview).pack(side=tk.LEFT, padx=(0, 6))
-        ttk.Button(header_actions, text="测试画布", style="Toolbar.TButton", command=self.start_test_rectangle).pack(side=tk.LEFT, padx=(0, 6))
-        ttk.Button(header_actions, text="开始绘制", style="Primary.TButton", command=self.start_drawing).pack(side=tk.LEFT, padx=(10, 6))
-        ttk.Button(header_actions, text="停止", style="Danger.TButton", command=self.stop_drawing).pack(side=tk.LEFT)
-
-        body = ttk.Frame(app, style="App.TFrame")
-        body.pack(fill=tk.BOTH, expand=True)
-
-        shell = ttk.Frame(body, style="Card.TFrame", padding=0)
-        shell.pack(side=tk.LEFT, fill=tk.Y, padx=(0, 12))
-
-        nav = ttk.Frame(shell, style="Nav.TFrame", padding=(10, 12))
-        nav.pack(side=tk.LEFT, fill=tk.Y)
-        settings_host = ttk.Frame(shell, style="Card.TFrame", padding=(12, 12))
-        settings_host.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-        settings_host.configure(width=370)
-        settings_host.pack_propagate(False)
-
-        right = ttk.Frame(body, style="App.TFrame")
-        right.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-
-        self.settings_pages: dict[str, ttk.Frame] = {}
-        self.nav_buttons: dict[str, ttk.Button] = {}
-
-        image_tab = self._create_scroll_page(settings_host, "图片")
-        canvas_tab = self._create_scroll_page(settings_host, "画布")
-        lineart_tab = self._create_scroll_page(settings_host, "线稿")
-        draw_tab = self._create_scroll_page(settings_host, "绘制")
-        run_tab = self._create_scroll_page(settings_host, "运行")
-        for key in ("图片", "画布", "线稿", "绘制", "运行"):
-            self._add_nav_button(nav, key)
-        self._show_settings_page("线稿")
-        self.param_sections: dict[str, ttk.LabelFrame] = {}
-
-        img_group = ttk.LabelFrame(image_tab, text="图片")
-        img_group.pack(fill=tk.X, pady=(0, 10))
-        ttk.Button(img_group, text="选择图片", command=self.choose_image).pack(fill=tk.X, padx=8, pady=(8, 4))
-        ttk.Button(img_group, text="刷新预览", command=self.refresh_preview).pack(fill=tk.X, padx=8, pady=4)
-        ttk.Label(img_group, textvariable=self.image_label_var, wraplength=330).pack(fill=tk.X, padx=8, pady=(4, 8))
-
-        self.section_image_common = self._create_param_section(image_tab, "通用图片参数")
-        self.section_image_common.pack(fill=tk.X, pady=(0, 10))
-        self._add_labeled_entry(self.section_image_common, "模糊强度 0/1/3/5", self.blur_var)
-        ttk.Checkbutton(self.section_image_common, text="保持图片比例并居中", variable=self.keep_aspect_var).pack(anchor="w", padx=8, pady=(2, 8))
-
-        canvas_group = ttk.LabelFrame(canvas_tab, text="画布位置")
-        canvas_group.pack(fill=tk.X, pady=(0, 10))
-        self._add_labeled_entry(canvas_group, "画布 X", self.canvas_x_var)
-        self._add_labeled_entry(canvas_group, "画布 Y", self.canvas_y_var)
-        self._add_labeled_entry(canvas_group, "画布宽 W", self.canvas_w_var)
-        self._add_labeled_entry(canvas_group, "画布高 H", self.canvas_h_var)
-        self._add_labeled_entry(canvas_group, "内边距", self.padding_var)
-
-        canvas_actions = ttk.LabelFrame(canvas_tab, text="标定")
-        canvas_actions.pack(fill=tk.X, pady=(0, 10))
-        ttk.Button(canvas_actions, text="3秒后记录左上角", command=lambda: self.start_calibration("tl")).pack(fill=tk.X, padx=8, pady=(8, 4))
-        ttk.Button(canvas_actions, text="3秒后记录右下角", command=lambda: self.start_calibration("br")).pack(fill=tk.X, padx=8, pady=4)
-        ttk.Button(canvas_actions, text="测试画布：画一个框", command=self.start_test_rectangle).pack(fill=tk.X, padx=8, pady=(4, 8))
-
-        method_group = ttk.LabelFrame(lineart_tab, text="处理方式")
-        method_group.pack(fill=tk.X, pady=(0, 10))
-        self.method_combo = ttk.Combobox(
-            method_group,
-            textvariable=self.method_var,
-            state="readonly",
-            values=("中心线追踪(线稿)", "动漫线稿(Anime2Sketch)", "逐行扫描(横向)", "边缘线稿(Canny)", "黑白轮廓(阈值)"),
-        )
-        self.method_combo.pack(fill=tk.X, padx=8, pady=(8, 4))
-        self.method_combo.bind("<<ComboboxSelected>>", lambda _e: self._update_param_visibility())
-        ttk.Button(method_group, text="恢复当前模式默认参数", command=self.reset_current_mode_defaults).pack(fill=tk.X, padx=8, pady=4)
-        self.method_hint_var = tk.StringVar(value="")
-        ttk.Label(method_group, textvariable=self.method_hint_var, foreground="#555555", wraplength=330).pack(anchor="w", padx=8, pady=(2, 8))
-
-        self.dynamic_param_frame = ttk.Frame(lineart_tab)
-        self.dynamic_param_frame.pack(fill=tk.X)
-
-        self.section_binary = self._create_param_section(self.dynamic_param_frame, "黑白线稿提取参数")
-        self._add_labeled_entry(self.section_binary, "黑白阈值", self.threshold_var)
-        ttk.Checkbutton(self.section_binary, text="深色区域作为线条", variable=self.dark_as_line_var).pack(anchor="w", padx=8, pady=(2, 8))
-
-        self.section_centerline = self._create_param_section(self.dynamic_param_frame, "中心线追踪参数")
-        self._add_labeled_entry(self.section_centerline, "断线连接像素", self.centerline_bridge_px_var)
-        ttk.Label(self.section_centerline, text="建议 1~2。新版会按端点方向桥接断线；值越大越积极，但也更可能粘连相邻线条。", foreground="#666666", wraplength=330).pack(anchor="w", padx=8, pady=(2, 6))
-        ttk.Checkbutton(self.section_centerline, text="中心线反向补笔（防空笔，更慢）", variable=self.centerline_retrace_var).pack(anchor="w", padx=8, pady=(2, 8))
-
-        self.section_anime2sketch = self._create_param_section(self.dynamic_param_frame, "Anime2Sketch 模型参数")
-        self._add_model_path_entry(self.section_anime2sketch)
-        self._add_labeled_entry(self.section_anime2sketch, "模型输入尺寸", self.anime2sketch_input_size_var)
-        self._add_labeled_entry(self.section_anime2sketch, "运行设备", self.anime2sketch_device_var)
-        ttk.Label(self.section_anime2sketch, text="设备填写 auto/cpu/cuda。默认权重用 netG.pth，improved.bin 也可用。", foreground="#666666", wraplength=330).pack(anchor="w", padx=8, pady=(2, 8))
-
-        self.section_canny = self._create_param_section(self.dynamic_param_frame, "Canny 边缘参数")
-        self._add_labeled_entry(self.section_canny, "Canny 低阈值", self.canny_low_var)
-        self._add_labeled_entry(self.section_canny, "Canny 高阈值", self.canny_high_var)
-
-        self.section_path = self._create_param_section(self.dynamic_param_frame, "折线路径参数")
-        self._add_labeled_entry(self.section_path, "路径简化 epsilon", self.epsilon_var)
-        self._add_labeled_entry(self.section_path, "最短路径长度", self.min_path_len_var)
-        self._add_labeled_entry(self.section_path, "最多路径数", self.max_paths_var)
-        self._add_labeled_entry(self.section_path, "点采样步长", self.point_step_var)
-
-        self.section_raster = self._create_param_section(self.dynamic_param_frame, "逐行扫描参数")
-        self._add_labeled_entry(self.section_raster, "扫描行距", self.raster_row_step_var)
-        self._add_labeled_entry(self.section_raster, "最短横线长度", self.raster_min_run_var)
-        self._add_labeled_entry(self.section_raster, "断点合并容差", self.raster_gap_tolerance_var)
-        self._add_labeled_entry(self.section_raster, "横线左右延长像素", self.raster_extend_px_var)
-        self._add_labeled_entry(self.section_raster, "最多横线数", self.max_paths_var)
-        ttk.Checkbutton(self.section_raster, text="蛇形顺序减少空移", variable=self.raster_serpentine_var).pack(anchor="w", padx=8, pady=2)
-        ttk.Checkbutton(self.section_raster, text="横线往返补笔（更黑更慢）", variable=self.raster_backtrack_var).pack(anchor="w", padx=8, pady=(2, 8))
-
-        self.section_stability = self._create_param_section(draw_tab, "断笔优化参数")
-        self.section_stability.pack(fill=tk.X, pady=(0, 10))
-        self._add_labeled_entry(self.section_stability, "鼠标插值步距px", self.mouse_step_px_var)
-        self._add_labeled_entry(self.section_stability, "插值点等待秒", self.move_duration_var)
-        self._add_labeled_entry(self.section_stability, "每笔最短秒数", self.min_stroke_duration_var)
-        self._add_labeled_entry(self.section_stability, "每100px绘制秒数", self.stroke_duration_per_100px_var)
-        self._add_labeled_entry(self.section_stability, "落笔前停顿秒", self.pre_down_pause_var)
-        self._add_labeled_entry(self.section_stability, "按下后停顿秒", self.pen_down_pause_var)
-        self._add_labeled_entry(self.section_stability, "落笔预热像素", self.pen_down_nudge_px_var)
-        self._add_labeled_entry(self.section_stability, "抬笔前停顿秒", self.pen_up_pause_var)
-        self._add_labeled_entry(self.section_stability, "笔画间隔秒", self.between_strokes_pause_var)
-
-        self.section_misc = self._create_param_section(run_tab, "运行参数")
-        self.section_misc.pack(fill=tk.X, pady=(0, 10))
-        self._add_labeled_entry(self.section_misc, "开始前倒计时秒", self.start_delay_var)
-        self._add_labeled_entry(self.section_misc, "测试框内边距", self.test_padding_var)
-        ttk.Checkbutton(self.section_misc, text="绘制时最小化本窗口", variable=self.minimize_var).pack(anchor="w", padx=8, pady=(2, 8))
-
-        action_group = ttk.LabelFrame(run_tab, text="操作")
-        action_group.pack(fill=tk.X, pady=(0, 10))
-        ttk.Button(action_group, text="保存配置", command=self.save_config).pack(fill=tk.X, padx=8, pady=(8, 4))
-        ttk.Button(action_group, text="加载配置", command=lambda: self.load_config(silent=False)).pack(fill=tk.X, padx=8, pady=4)
-        ttk.Button(action_group, text="刷新预览", command=self.refresh_preview).pack(fill=tk.X, padx=8, pady=4)
-        ttk.Button(action_group, text="开始绘制", command=self.start_drawing).pack(fill=tk.X, padx=8, pady=4)
-        ttk.Button(action_group, text="停止绘制", command=self.stop_drawing).pack(fill=tk.X, padx=8, pady=(4, 8))
-
-        preview_group = ttk.Frame(right, style="Card.TFrame", padding=12)
-        preview_group.pack(fill=tk.BOTH, expand=True, pady=(0, 12))
-
-        ttk.Label(preview_group, text="预览工作台", style="SectionTitle.TLabel").pack(anchor="w", pady=(0, 10))
-        previews = ttk.PanedWindow(preview_group, orient=tk.HORIZONTAL)
-        previews.pack(fill=tk.BOTH, expand=True)
-
-        original_card = ttk.Frame(previews, style="Preview.TFrame", padding=8)
-        processed_card = ttk.Frame(previews, style="Preview.TFrame", padding=8)
-        previews.add(original_card, weight=1)
-        previews.add(processed_card, weight=1)
-
-        ttk.Label(original_card, text="原图", style="Subtle.TLabel").pack(anchor="w", pady=(0, 6))
-        self.original_preview_label = ttk.Label(original_card, text="原图预览", anchor="center", style="Preview.TLabel")
-        self.original_preview_label.pack(fill=tk.BOTH, expand=True)
-
-        ttk.Label(processed_card, text="线稿", style="Subtle.TLabel").pack(anchor="w", pady=(0, 6))
-        self.processed_preview_label = ttk.Label(processed_card, text="线稿预览", anchor="center", style="Preview.TLabel")
-        self.processed_preview_label.pack(fill=tk.BOTH, expand=True)
-
-        log_group = ttk.Frame(right, style="Card.TFrame", padding=12)
-        log_group.pack(fill=tk.BOTH, expand=False)
-        ttk.Label(log_group, text="运行日志", style="SectionTitle.TLabel").pack(anchor="w", pady=(0, 8))
-
-        log_body = ttk.Frame(log_group, style="Card.TFrame")
-        log_body.pack(fill=tk.BOTH, expand=True)
-        self.log_text = tk.Text(log_body, height=10, wrap="word", bg="#0f172a", fg="#e5e7eb", insertbackground="#e5e7eb", relief=tk.FLAT, padx=10, pady=8)
-        self.log_text.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-
-        log_scroll = ttk.Scrollbar(log_body, command=self.log_text.yview)
-        log_scroll.pack(side=tk.LEFT, fill=tk.Y)
-        self.log_text.configure(yscrollcommand=log_scroll.set)
-        self.refresh_anime2sketch_models(silent=True)
-
     def _configure_style(self):
         style = ttk.Style(self.root)
         try:
@@ -296,29 +438,64 @@ class HeyTeaCupLabelDrawerGUI:
         except tk.TclError:
             pass
 
-        style.configure("App.TFrame", background="#eef2f7")
+        style.configure("App.TFrame", background="#f3f5f8")
         style.configure("Header.TFrame", background="#172033")
         style.configure("HeaderTitle.TLabel", background="#172033", foreground="#ffffff", font=("Microsoft YaHei UI", 15, "bold"))
         style.configure("HeaderSubtle.TLabel", background="#172033", foreground="#b6c2d9", font=("Microsoft YaHei UI", 9))
         style.configure("Card.TFrame", background="#ffffff", relief=tk.FLAT)
-        style.configure("Nav.TFrame", background="#f8fafc")
-        style.configure("Preview.TFrame", background="#f8fafc", relief=tk.FLAT)
-        style.configure("Preview.TLabel", background="#f8fafc", foreground="#64748b", font=("Microsoft YaHei UI", 10))
+        style.configure("Nav.TFrame", background="#f7f8fa")
+        style.configure("Preview.TFrame", background="#f7f8fa", relief=tk.FLAT)
+        style.configure("Preview.TLabel", background="#f7f8fa", foreground="#7c8799", font=("Microsoft YaHei UI", 10))
         style.configure("SectionTitle.TLabel", background="#ffffff", foreground="#111827", font=("Microsoft YaHei UI", 11, "bold"))
-        style.configure("Subtle.TLabel", background="#f8fafc", foreground="#64748b", font=("Microsoft YaHei UI", 9))
+        style.configure("Subtle.TLabel", background="#f7f8fa", foreground="#64748b", font=("Microsoft YaHei UI", 9, "bold"))
+        style.configure("Hint.TLabel", background="#ffffff", foreground="#64748b", font=("Microsoft YaHei UI", 9))
+        style.configure("Value.TLabel", background="#ffffff", foreground="#1d4ed8", font=("Microsoft YaHei UI", 9, "bold"))
+        style.configure("Status.TLabel", background="#ffffff", foreground="#64748b", font=("Microsoft YaHei UI", 9))
+        style.configure("Parameter.TLabel", background="#ffffff", foreground="#334155", font=("Microsoft YaHei UI", 9))
         style.configure("TLabel", background="#ffffff", foreground="#1f2937", font=("Microsoft YaHei UI", 9))
         style.configure("TLabelframe", background="#ffffff", bordercolor="#d8dee9")
         style.configure("TLabelframe.Label", background="#ffffff", foreground="#334155", font=("Microsoft YaHei UI", 9, "bold"))
         style.configure("TCheckbutton", background="#ffffff", foreground="#1f2937", font=("Microsoft YaHei UI", 9))
-        style.configure("TEntry", padding=(4, 3))
-        style.configure("TCombobox", padding=(4, 3))
+        style.configure("TEntry", padding=(5, 4))
+        style.configure("TCombobox", padding=(5, 4))
+        style.configure("TButton", padding=(10, 6), font=("Microsoft YaHei UI", 9))
         style.configure("Toolbar.TButton", padding=(12, 7), font=("Microsoft YaHei UI", 9))
         style.configure("Primary.TButton", padding=(14, 7), font=("Microsoft YaHei UI", 9, "bold"), foreground="#ffffff", background="#2563eb")
         style.map("Primary.TButton", background=[("active", "#1d4ed8"), ("pressed", "#1e40af")])
         style.configure("Danger.TButton", padding=(12, 7), font=("Microsoft YaHei UI", 9, "bold"), foreground="#ffffff", background="#dc2626")
         style.map("Danger.TButton", background=[("active", "#b91c1c"), ("pressed", "#991b1b")])
-        style.configure("Nav.TButton", padding=(14, 9), anchor="w", font=("Microsoft YaHei UI", 10), background="#f8fafc")
+        style.configure("Accent.TButton", foreground="#1d4ed8", background="#eff6ff")
+        style.map("Accent.TButton", background=[("active", "#dbeafe"), ("pressed", "#bfdbfe")])
+        style.configure("Link.TButton", padding=(8, 3), foreground="#475569", background="#ffffff")
+        style.map("Link.TButton", background=[("active", "#f1f5f9")])
+        style.configure("Nav.TButton", padding=(14, 10), anchor="w", font=("Microsoft YaHei UI", 10), background="#f7f8fa")
         style.configure("NavActive.TButton", padding=(14, 9), anchor="w", font=("Microsoft YaHei UI", 10, "bold"), foreground="#1d4ed8", background="#dbeafe")
+
+    def _add_buttons(self, parent, specs, horizontal=False):
+        for index, (text, command, style) in enumerate(specs):
+            button = ttk.Button(parent, text=text, command=command, style=style or "TButton")
+            if horizontal:
+                button.pack(side=tk.LEFT, padx=(0 if index == 0 else 6, 0))
+            else:
+                button.pack(fill=tk.X, padx=10, pady=(8 if index == 0 else 0, 5))
+
+    def _add_entry_specs(self, parent, specs):
+        for label, variable in specs:
+            self._add_labeled_entry(parent, label, variable)
+
+    def _add_checkbutton(self, parent, text: str, variable: tk.BooleanVar, pady=2):
+        button = ttk.Checkbutton(parent, text=text, variable=variable, cursor="question_arrow")
+        button.pack(anchor="w", padx=10, pady=pady)
+        self._add_parameter_tip(button, text)
+        return button
+
+    def _create_preview_card(self, parent, title: str, placeholder: str) -> ttk.Label:
+        card = ttk.Frame(parent, style="Preview.TFrame", padding=10)
+        parent.add(card, weight=1)
+        ttk.Label(card, text=title, style="Subtle.TLabel").pack(anchor="w", pady=(0, 8))
+        label = ttk.Label(card, text=placeholder, anchor="center", style="Preview.TLabel")
+        label.pack(fill=tk.BOTH, expand=True)
+        return label
 
     def _create_scroll_page(self, parent: ttk.Frame, title: str) -> ttk.Frame:
         outer = ttk.Frame(parent, style="Card.TFrame")
@@ -385,21 +562,30 @@ class HeyTeaCupLabelDrawerGUI:
 
     def _add_labeled_entry(self, parent, label: str, variable: tk.StringVar):
         row = ttk.Frame(parent)
-        row.pack(fill=tk.X, padx=8, pady=2)
-        ttk.Label(row, text=label, width=14).pack(side=tk.LEFT)
-        ttk.Entry(row, textvariable=variable, width=14).pack(side=tk.LEFT, fill=tk.X, expand=True)
+        row.pack(fill=tk.X, padx=10, pady=3)
+        label_widget = ttk.Label(row, text=label, width=15, style="Parameter.TLabel", cursor="question_arrow")
+        label_widget.pack(side=tk.LEFT)
+        self._add_parameter_tip(label_widget, label)
+        ttk.Entry(row, textvariable=variable, width=12).pack(side=tk.LEFT, fill=tk.X, expand=True)
         return row
 
     def _add_model_path_entry(self, parent):
         row = ttk.Frame(parent)
-        row.pack(fill=tk.X, padx=8, pady=2)
-        ttk.Label(row, text="模型权重文件", width=14).pack(side=tk.LEFT)
-        self.anime2sketch_model_combo = ttk.Combobox(row, textvariable=self.anime2sketch_model_choice_var, state="readonly", width=14)
+        row.pack(fill=tk.X, padx=10, pady=3)
+        label_widget = ttk.Label(row, text="模型权重文件", width=15, style="Parameter.TLabel", cursor="question_arrow")
+        label_widget.pack(side=tk.LEFT)
+        self._add_parameter_tip(label_widget, "模型权重文件")
+        self.anime2sketch_model_combo = ttk.Combobox(row, textvariable=self.anime2sketch_model_choice_var, state="readonly", width=12)
         self.anime2sketch_model_combo.pack(side=tk.LEFT, fill=tk.X, expand=True)
         self.anime2sketch_model_combo.bind("<<ComboboxSelected>>", lambda _e: self._select_anime2sketch_model())
         ttk.Button(row, text="刷新", command=self.refresh_anime2sketch_models).pack(side=tk.LEFT, padx=(4, 0))
         ttk.Button(row, text="选择文件", command=self.choose_anime2sketch_model).pack(side=tk.LEFT, padx=(4, 0))
         return row
+
+    def _add_parameter_tip(self, widget: tk.Widget, label: str):
+        help_text = PARAMETER_HELP.get(label)
+        if help_text:
+            self.parameter_tips.append(HoverTip(widget, help_text))
 
     def _create_param_section(self, parent, title: str) -> ttk.LabelFrame:
         section = ttk.LabelFrame(parent, text=title)
@@ -883,16 +1069,23 @@ class HeyTeaCupLabelDrawerGUI:
         if self.original_image is None:
             return
         img = self.original_image.copy()
-        img.thumbnail((390, 430), Image.Resampling.LANCZOS)
+        img.thumbnail(self._preview_bounds(self.original_preview_label), Image.Resampling.LANCZOS)
         self.preview_photo = ImageTk.PhotoImage(img)
         self.original_preview_label.configure(image=self.preview_photo, text="")
 
     def _show_processed_preview(self, debug_img: np.ndarray):
         # debug_img 是 0/255 灰度图：黑色线条、白色背景。
         pil = Image.fromarray(debug_img).convert("RGB")
-        pil.thumbnail((390, 430), Image.Resampling.NEAREST)
+        pil.thumbnail(self._preview_bounds(self.processed_preview_label), Image.Resampling.NEAREST)
         self.processed_photo = ImageTk.PhotoImage(pil)
         self.processed_preview_label.configure(image=self.processed_photo, text="")
+
+    def _preview_bounds(self, label: ttk.Label) -> tuple[int, int]:
+        return (
+            max(160, label.winfo_width() - 20),
+            max(160, label.winfo_height() - 20),
+        )
+
     # ---------- 标定 ----------
     def start_calibration(self, which: str):
         def countdown(n: int):
@@ -1049,6 +1242,9 @@ class HeyTeaCupLabelDrawerGUI:
         return self.worker_thread is not None and self.worker_thread.is_alive()
 
     # ---------- 日志 ----------
+    def _clear_log(self):
+        self.log_text.delete("1.0", tk.END)
+
     def _log(self, msg: str):
         timestamp = time.strftime("%H:%M:%S")
         line = f"[{timestamp}] {msg}\n"
