@@ -10,3 +10,4 @@ build/
 heytea_draw_config_centerline.json
 models/**/*.pth
 models/**/*.bin
+models/**/*.onnx

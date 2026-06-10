@@ -14,7 +14,24 @@ pip install pyautogui opencv-python pillow numpy
 pip install -e ".[anime]"
 ```
 
-然后通过界面的“导入”按钮添加 Anime2Sketch 的 `netG.pth` 或 `improved.bin` 权重文件。程序会将模型统一保存至 `models/anime2sketch/`。
+如需使用全部线稿模型（AniLines、Anime2Sketch、Informative Drawings）：
+
+```powershell
+pip install -e ".[models]"
+```
+
+然后通过界面的“导入”按钮添加对应模型文件。程序支持：
+
+- `AniLines Detail`：推荐用于动漫和平涂插画，模型文件为 `detail.pth`。
+- `Anime2Sketch`：适合动漫与插画，模型文件为 `netG.pth` 或 `improved.bin`。
+- `Informative Drawings`：推荐用于照片和通用场景，模型文件为 `model.onnx`。
+
+模型会统一保存至 `models/` 下的独立子目录。
+
+参考模型来源：
+
+- AniLines：https://github.com/zhenglinpan/AniLines-Anime-Lineart-Extractor
+- Informative Drawings：https://github.com/carolineec/informative-drawings
 
 ## 运行
 

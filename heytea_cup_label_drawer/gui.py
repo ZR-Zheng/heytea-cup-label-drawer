@@ -14,7 +14,14 @@ from PIL import Image, ImageTk
 from tkinter import filedialog, messagebox, ttk
 
 from .automation import countdown_in_worker, draw_screen_polyline, map_point_to_screen, safe_mouse_up
-from .config import ANIME2SKETCH_MODELS_DIR, DEFAULT_CONFIG_PATH, MODELS_DIR, DrawConfig
+from .config import (
+    ANILINES_MODELS_DIR,
+    ANIME2SKETCH_MODELS_DIR,
+    DEFAULT_CONFIG_PATH,
+    INFORMATIVE_DRAWINGS_MODELS_DIR,
+    MODELS_DIR,
+    DrawConfig,
+)
 from .processing import flatten_image, make_paths
 
 
@@ -27,9 +34,9 @@ PARAMETER_HELP = {
     "模糊强度": "预处理时使用的模糊核大小。可填 0、1、3、5、7 或 9；数值越大，细节越少、线条越平滑。",
     "黑白阈值": "区分线条与背景的灰度界线，范围 0~255。值越大，更多较浅区域会被识别为深色线条。",
     "断线连接像素": "尝试连接相距较近的断点。建议 1~2；过大可能把相邻线条错误连接。",
-    "模型权重文件": "Anime2Sketch 使用的模型权重文件。导入的 .pth 或 .bin 文件统一保存在 models/anime2sketch 文件夹。",
-    "模型输入尺寸": "送入 Anime2Sketch 模型的正方形边长。推荐 512；越大细节越多，但处理更慢、占用内存更多。",
-    "运行设备": "Anime2Sketch 推理设备。auto 自动选择，cpu 使用处理器，cuda 使用 NVIDIA 显卡。",
+    "模型权重文件": "当前线稿处理方式使用的模型文件。导入后会按模型类型保存到 models 下的独立文件夹。",
+    "模型输入尺寸": "送入线稿模型的正方形边长。推荐 512；越大细节越多，但处理更慢、占用内存更多。",
+    "运行设备": "模型推理设备。auto 自动选择，cpu 使用处理器，cuda 优先使用 NVIDIA 显卡。",
     "低阈值": "Canny 边缘检测的低阈值。降低会保留更多弱边缘，也可能引入噪点。",
     "高阈值": "Canny 边缘检测的高阈值，必须高于低阈值。提高会只保留更明显的边缘。",
     "简化 epsilon": "折线路径简化强度。值越大，路径点越少、绘制更快，但曲线细节也会减少。",
@@ -58,6 +65,30 @@ PARAMETER_HELP = {
     "蛇形顺序减少空移": "让相邻扫描行交替从左向右和从右向左绘制，减少鼠标在行间空移。",
     "横线往返补笔（更黑更慢）": "每条扫描横线完成后沿原路返回，可让填充更深，但绘制时间更长。",
     "绘制时最小化本窗口": "开始正式绘制时自动最小化工具窗口，结束后恢复，避免遮挡目标画布。",
+}
+
+MODEL_METHODS = {
+    "动漫线稿(Anime2Sketch)": {
+        "name": "Anime2Sketch",
+        "dir": ANIME2SKETCH_MODELS_DIR,
+        "field": "anime2sketch_model_path",
+        "extensions": (".pth", ".bin"),
+        "pattern": "*.pth *.bin",
+    },
+    "动漫精细线稿(AniLines)": {
+        "name": "AniLines Detail",
+        "dir": ANILINES_MODELS_DIR,
+        "field": "anilines_model_path",
+        "extensions": (".pth",),
+        "pattern": "*.pth",
+    },
+    "通用语义线稿(Informative Drawings)": {
+        "name": "Informative Drawings",
+        "dir": INFORMATIVE_DRAWINGS_MODELS_DIR,
+        "field": "informative_drawings_model_path",
+        "extensions": (".onnx",),
+        "pattern": "*.onnx",
+    },
 }
 
 
@@ -145,7 +176,8 @@ class HeyTeaCupLabelDrawerGUI:
         self.worker_thread: threading.Thread | None = None
         self.calib_top_left: tuple[int, int] | None = None
         self.parameter_tips: list[HoverTip] = []
-        ANIME2SKETCH_MODELS_DIR.mkdir(parents=True, exist_ok=True)
+        for spec in MODEL_METHODS.values():
+            spec["dir"].mkdir(parents=True, exist_ok=True)
 
         self._build_ui()
         self.load_config(silent=True)
@@ -258,7 +290,15 @@ class HeyTeaCupLabelDrawerGUI:
             method_group,
             textvariable=self.method_var,
             state="readonly",
-            values=("中心线追踪(线稿)", "动漫线稿(Anime2Sketch)", "逐行扫描(横向)", "边缘线稿(Canny)", "黑白轮廓(阈值)"),
+            values=(
+                "中心线追踪(线稿)",
+                "动漫精细线稿(AniLines)",
+                "动漫线稿(Anime2Sketch)",
+                "通用语义线稿(Informative Drawings)",
+                "逐行扫描(横向)",
+                "边缘线稿(Canny)",
+                "黑白轮廓(阈值)",
+            ),
         )
         self.method_combo.pack(fill=tk.X, padx=10, pady=(9, 5))
         self.method_combo.bind("<<ComboboxSelected>>", lambda _e: self._update_param_visibility())
@@ -278,7 +318,7 @@ class HeyTeaCupLabelDrawerGUI:
         ttk.Label(self.section_centerline, text="建议 1~2；数值越大越容易连接相邻线条。", style="Hint.TLabel", wraplength=340).pack(anchor="w", padx=10, pady=(2, 5))
         self._add_checkbutton(self.section_centerline, "反向补笔（防空笔，更慢）", self.centerline_retrace_var, pady=(2, 9))
 
-        self.section_anime2sketch = self._create_param_section(self.dynamic_param_frame, "Anime2Sketch 模型")
+        self.section_anime2sketch = self._create_param_section(self.dynamic_param_frame, "线稿模型")
         self._add_model_path_entry(self.section_anime2sketch)
         self._add_entry_specs(
             self.section_anime2sketch,
@@ -287,7 +327,7 @@ class HeyTeaCupLabelDrawerGUI:
                 ("运行设备", self.anime2sketch_device_var),
             ],
         )
-        ttk.Label(self.section_anime2sketch, text="运行设备可填写 auto、cpu 或 cuda。", style="Hint.TLabel").pack(anchor="w", padx=10, pady=(2, 9))
+        ttk.Label(self.section_anime2sketch, text="模型会按类型独立管理；设备可填写 auto、cpu 或 cuda。", style="Hint.TLabel", wraplength=340).pack(anchor="w", padx=10, pady=(2, 9))
         ttk.Button(self.section_anime2sketch, text="打开模型文件夹", command=self.open_models_folder).pack(fill=tk.X, padx=10, pady=(0, 9))
 
         self.section_canny = self._create_param_section(self.dynamic_param_frame, "Canny 边缘")
@@ -617,6 +657,8 @@ class HeyTeaCupLabelDrawerGUI:
         if not hasattr(self, "section_image_common"):
             return
         method = self.method_var.get() or "中心线追踪(线稿)"
+        if method in MODEL_METHODS:
+            self._sync_model_controls_for_method(method)
 
         if method == "中心线追踪(线稿)":
             self.method_hint_var.set("适合黑色线稿：提取黑线→细化骨架→方向桥接断点→分叉处按角度延续主干。不会描粗线外轮廓。")
@@ -627,6 +669,22 @@ class HeyTeaCupLabelDrawerGUI:
             ]
         elif method == "动漫线稿(Anime2Sketch)":
             self.method_hint_var.set("适合彩色动漫/插画：先用 Anime2Sketch 抽取干净线稿，再转成中心线主干绘制。")
+            sections = [
+                self.section_anime2sketch,
+                self.section_binary,
+                self.section_centerline,
+                self.section_path,
+            ]
+        elif method == "动漫精细线稿(AniLines)":
+            self.method_hint_var.set("推荐用于动漫和平涂插画：比 Anime2Sketch 保留更多角色、背景和色块边缘细节。")
+            sections = [
+                self.section_anime2sketch,
+                self.section_binary,
+                self.section_centerline,
+                self.section_path,
+            ]
+        elif method == "通用语义线稿(Informative Drawings)":
+            self.method_hint_var.set("推荐用于照片和通用场景：保留物体轮廓、几何与语义结构，CPU 也可运行。")
             sections = [
                 self.section_anime2sketch,
                 self.section_binary,
@@ -701,6 +759,34 @@ class HeyTeaCupLabelDrawerGUI:
                 "pen_up_pause": 0.025,
                 "between_strokes_pause": 0.012,
                 "centerline_retrace": True,
+            },
+            "动漫精细线稿(AniLines)": {
+                "threshold": 210,
+                "blur": 0,
+                "dark_as_line": True,
+                "keep_aspect": True,
+                "anime2sketch_input_size": 512,
+                "anime2sketch_device": "auto",
+                "centerline_bridge_px": 1,
+                "epsilon": 0.8,
+                "min_path_len": 6.0,
+                "max_paths": 50000,
+                "point_step": 1,
+                "centerline_retrace": True,
+            },
+            "通用语义线稿(Informative Drawings)": {
+                "threshold": 215,
+                "blur": 0,
+                "dark_as_line": True,
+                "keep_aspect": True,
+                "anime2sketch_input_size": 512,
+                "anime2sketch_device": "auto",
+                "centerline_bridge_px": 1,
+                "epsilon": 1.0,
+                "min_path_len": 8.0,
+                "max_paths": 40000,
+                "point_step": 1,
+                "centerline_retrace": False,
             },
             "逐行扫描(横向)": {
                 "threshold": 150,
@@ -800,8 +886,9 @@ class HeyTeaCupLabelDrawerGUI:
         self.threshold_var.set(str(c.threshold))
         self.blur_var.set(str(c.blur))
         self.centerline_bridge_px_var.set(str(c.centerline_bridge_px))
-        self.anime2sketch_model_path_var.set(c.anime2sketch_model_path)
-        self._set_anime2sketch_model_choice(c.anime2sketch_model_path)
+        active_model_path = self._model_path_for_method(c.method)
+        self.anime2sketch_model_path_var.set(active_model_path)
+        self._set_anime2sketch_model_choice(active_model_path)
         self.anime2sketch_input_size_var.set(str(c.anime2sketch_input_size))
         self.anime2sketch_device_var.set(c.anime2sketch_device)
         self.dark_as_line_var.set(c.dark_as_line)
@@ -831,6 +918,14 @@ class HeyTeaCupLabelDrawerGUI:
         self.minimize_var.set(c.minimize_when_drawing)
 
     def _sync_vars_to_config(self) -> DrawConfig:
+        active_model_field = self._model_field_for_method(self.method_var.get())
+        model_paths = {
+            "anime2sketch_model_path": self.config.anime2sketch_model_path,
+            "anilines_model_path": self.config.anilines_model_path,
+            "informative_drawings_model_path": self.config.informative_drawings_model_path,
+        }
+        if active_model_field:
+            model_paths[active_model_field] = self.anime2sketch_model_path_var.get().strip()
         try:
             c = DrawConfig(
                 canvas_x=int(float(self.canvas_x_var.get())),
@@ -845,7 +940,9 @@ class HeyTeaCupLabelDrawerGUI:
                 threshold=int(float(self.threshold_var.get())),
                 blur=int(float(self.blur_var.get())),
                 centerline_bridge_px=max(0, int(float(self.centerline_bridge_px_var.get()))),
-                anime2sketch_model_path=self.anime2sketch_model_path_var.get().strip(),
+                anime2sketch_model_path=model_paths["anime2sketch_model_path"],
+                anilines_model_path=model_paths["anilines_model_path"],
+                informative_drawings_model_path=model_paths["informative_drawings_model_path"],
                 anime2sketch_input_size=max(32, int(float(self.anime2sketch_input_size_var.get()))),
                 anime2sketch_device=self.anime2sketch_device_var.get().strip() or "auto",
                 dark_as_line=bool(self.dark_as_line_var.get()),
@@ -890,15 +987,17 @@ class HeyTeaCupLabelDrawerGUI:
             raise ValueError("黑白阈值应在 0 到 255 之间。")
         if c.centerline_bridge_px > 5:
             raise ValueError("断线连接像素建议在 0 到 5 之间，过大容易把相邻线条粘连。")
-        if c.method == "动漫线稿(Anime2Sketch)":
-            if not c.anime2sketch_model_path:
-                raise ValueError("请先选择 Anime2Sketch 模型权重文件（netG.pth 或 improved.bin）。")
-            if not os.path.exists(c.anime2sketch_model_path):
-                raise ValueError(f"Anime2Sketch 模型文件不存在：{c.anime2sketch_model_path}")
+        if c.method in MODEL_METHODS:
+            spec = MODEL_METHODS[c.method]
+            model_path = getattr(c, spec["field"])
+            if not model_path:
+                raise ValueError(f"请先导入并选择 {spec['name']} 模型文件。")
+            if not os.path.exists(model_path):
+                raise ValueError(f"{spec['name']} 模型文件不存在：{model_path}")
             if c.anime2sketch_input_size < 128:
-                raise ValueError("Anime2Sketch 模型输入尺寸建议至少 128，推荐 512。")
+                raise ValueError("模型输入尺寸建议至少 128，推荐 512。")
             if c.anime2sketch_device.lower() not in ("auto", "cpu", "cuda"):
-                raise ValueError("Anime2Sketch 运行设备只能填写 auto、cpu 或 cuda。")
+                raise ValueError("模型运行设备只能填写 auto、cpu 或 cuda。")
         if c.pen_down_nudge_px > 10:
             raise ValueError("落笔预热像素建议在 0 到 10 之间。")
 
@@ -926,8 +1025,10 @@ class HeyTeaCupLabelDrawerGUI:
                 payload = json.load(f)
 
             known = {k: v for k, v in payload.items() if k in DrawConfig.__dataclass_fields__}
-            if "anime2sketch_model_path" in known:
-                known["anime2sketch_model_path"] = self._resolve_model_path(known["anime2sketch_model_path"])
+            for method, spec in MODEL_METHODS.items():
+                field = spec["field"]
+                if field in known:
+                    known[field] = self._resolve_model_path(known[field], method)
             self.config = DrawConfig(**known)
             self._sync_config_to_vars()
 
@@ -946,6 +1047,10 @@ class HeyTeaCupLabelDrawerGUI:
         if not hasattr(self, "anime2sketch_model_combo"):
             return
 
+        method = self.method_var.get()
+        spec = MODEL_METHODS.get(method)
+        if spec is None:
+            return
         models = self._discover_anime2sketch_models()
         current_path = self.anime2sketch_model_path_var.get().strip()
         if current_path and os.path.exists(current_path):
@@ -964,14 +1069,18 @@ class HeyTeaCupLabelDrawerGUI:
             self.anime2sketch_model_choice_var.set("")
 
         if not silent:
-            self._log(f"已刷新 Anime2Sketch 模型列表：{len(labels)} 个。")
+            self._log(f"已刷新 {spec['name']} 模型列表：{len(labels)} 个。")
 
     def _discover_anime2sketch_models(self) -> dict[str, str]:
         models: dict[str, str] = {}
-        ANIME2SKETCH_MODELS_DIR.mkdir(parents=True, exist_ok=True)
-        for cur_dir, _dir_names, file_names in os.walk(ANIME2SKETCH_MODELS_DIR):
+        spec = MODEL_METHODS.get(self.method_var.get())
+        if spec is None:
+            return models
+        model_dir = spec["dir"]
+        model_dir.mkdir(parents=True, exist_ok=True)
+        for cur_dir, _dir_names, file_names in os.walk(model_dir):
             for file_name in file_names:
-                if os.path.splitext(file_name)[1].lower() not in (".pth", ".bin"):
+                if os.path.splitext(file_name)[1].lower() not in spec["extensions"]:
                     continue
                 path = os.path.join(cur_dir, file_name)
                 models[self._model_choice_label(path)] = path
@@ -980,8 +1089,10 @@ class HeyTeaCupLabelDrawerGUI:
 
     def _model_choice_label(self, path: str) -> str:
         p = os.path.abspath(path)
+        spec = MODEL_METHODS.get(self.method_var.get())
+        model_dir = spec["dir"] if spec else MODELS_DIR
         try:
-            rel = os.path.relpath(p, ANIME2SKETCH_MODELS_DIR)
+            rel = os.path.relpath(p, model_dir)
             if not rel.startswith(".."):
                 return rel
         except ValueError:
@@ -1006,14 +1117,22 @@ class HeyTeaCupLabelDrawerGUI:
         path = self.available_anime_models.get(label)
         if path:
             self.anime2sketch_model_path_var.set(path)
-            self._log(f"已选择 Anime2Sketch 模型：{path}")
+            method = self.method_var.get()
+            field = self._model_field_for_method(method)
+            if field:
+                setattr(self.config, field, path)
+            self._log(f"已选择 {MODEL_METHODS[method]['name']} 模型：{path}")
 
     def choose_anime2sketch_model(self):
+        method = self.method_var.get()
+        spec = MODEL_METHODS.get(method)
+        if spec is None:
+            return
         path = filedialog.askopenfilename(
-            title="导入 Anime2Sketch 模型权重",
-            initialdir=str(ANIME2SKETCH_MODELS_DIR),
+            title=f"导入 {spec['name']} 模型",
+            initialdir=str(spec["dir"]),
             filetypes=[
-                ("Anime2Sketch 权重", "*.pth *.bin"),
+                (f"{spec['name']} 模型", spec["pattern"]),
                 ("所有文件", "*.*"),
             ],
         )
@@ -1027,6 +1146,7 @@ class HeyTeaCupLabelDrawerGUI:
         self.anime2sketch_model_path_var.set(imported_path)
         self.refresh_anime2sketch_models(silent=True)
         self._set_anime2sketch_model_choice(imported_path)
+        setattr(self.config, spec["field"], imported_path)
         self._log(f"模型已导入：{imported_path}")
 
     def open_models_folder(self):
@@ -1037,12 +1157,15 @@ class HeyTeaCupLabelDrawerGUI:
             messagebox.showinfo("模型文件夹", str(MODELS_DIR))
 
     def _import_model_file(self, path: str) -> str:
+        spec = MODEL_METHODS.get(self.method_var.get())
+        if spec is None:
+            raise ValueError("当前处理方式不使用模型。")
         source = os.path.abspath(path)
-        if os.path.splitext(source)[1].lower() not in (".pth", ".bin"):
-            raise ValueError("仅支持 .pth 或 .bin 模型文件。")
+        if os.path.splitext(source)[1].lower() not in spec["extensions"]:
+            raise ValueError(f"{spec['name']} 仅支持：{', '.join(spec['extensions'])}")
 
-        ANIME2SKETCH_MODELS_DIR.mkdir(parents=True, exist_ok=True)
-        destination = os.path.abspath(ANIME2SKETCH_MODELS_DIR / os.path.basename(source))
+        spec["dir"].mkdir(parents=True, exist_ok=True)
+        destination = os.path.abspath(spec["dir"] / os.path.basename(source))
         if os.path.normcase(source) == os.path.normcase(destination):
             return destination
         if os.path.exists(destination) and not messagebox.askyesno("覆盖模型", f"模型文件已存在：\n{destination}\n\n是否覆盖？"):
@@ -1050,17 +1173,30 @@ class HeyTeaCupLabelDrawerGUI:
         shutil.copy2(source, destination)
         return destination
 
-    def _resolve_model_path(self, path: str) -> str:
+    def _resolve_model_path(self, path: str, method: str) -> str:
         if not path:
             return ""
         expanded = os.path.abspath(os.path.expanduser(path))
         if os.path.exists(expanded):
             return expanded
 
-        migrated = ANIME2SKETCH_MODELS_DIR / os.path.basename(path)
+        migrated = MODEL_METHODS[method]["dir"] / os.path.basename(path)
         if migrated.exists():
             return str(migrated.resolve())
         return path
+
+    def _model_field_for_method(self, method: str) -> str | None:
+        spec = MODEL_METHODS.get(method)
+        return spec["field"] if spec else None
+
+    def _model_path_for_method(self, method: str) -> str:
+        field = self._model_field_for_method(method)
+        return getattr(self.config, field, "") if field else ""
+
+    def _sync_model_controls_for_method(self, method: str):
+        path = self._model_path_for_method(method)
+        self.anime2sketch_model_path_var.set(path)
+        self.refresh_anime2sketch_models(silent=True)
 
     def choose_image(self):
         path = filedialog.askopenfilename(
@@ -1100,8 +1236,8 @@ class HeyTeaCupLabelDrawerGUI:
             self._show_processed_preview(debug_img)
             if c.method == "逐行扫描(横向)":
                 self._log(f"扫描路径已生成：{len(paths)} 条横线。断笔优先调慢：每100px绘制秒数/每笔最短秒数；太慢再增大扫描行距。")
-            elif c.method == "动漫线稿(Anime2Sketch)":
-                self._log(f"Anime2Sketch 线稿已生成：{len(paths)} 条主干路径。彩色图细节过多时可提高最短路径长度或降低最多路径数。")
+            elif c.method in MODEL_METHODS:
+                self._log(f"{MODEL_METHODS[c.method]['name']} 线稿已生成：{len(paths)} 条主干路径。细节过多时可提高最短路径长度或降低最多路径数。")
             elif c.method == "中心线追踪(线稿)":
                 self._log(f"中心线已生成：{len(paths)} 条主干路径。若仍断笔，先把断线连接像素调到 2~3；若粘连，降到 1 或降低阈值。")
             else:
@@ -1259,7 +1395,7 @@ class HeyTeaCupLabelDrawerGUI:
                 screen_points = [map_point_to_screen(c, p) for p in pts]
                 is_raster_line = (c.method == "逐行扫描(横向)" and len(screen_points) == 2)
                 draw_screen_polyline(c, screen_points, self.stop_event, is_raster_line=is_raster_line)
-                if c.method in ("中心线追踪(线稿)", "动漫线稿(Anime2Sketch)") and c.centerline_retrace and not self.stop_event.is_set():
+                if c.method in ("中心线追踪(线稿)", *MODEL_METHODS) and c.centerline_retrace and not self.stop_event.is_set():
                     draw_screen_polyline(c, list(reversed(screen_points)), self.stop_event, is_raster_line=False)
 
                 drawn += 1

@@ -18,6 +18,10 @@ dependencies = [
 anime = [
     "torch>=2.0",
 ]
+models = [
+    "torch>=2.0",
+    "onnxruntime>=1.18",
+]
 
 [project.scripts]
 heytea-cup-label-drawer = "heytea_cup_label_drawer.main:main"

@@ -4,8 +4,10 @@ import cv2
 import numpy as np
 from PIL import Image, ImageOps
 
+from .anilines import anilines_to_gray
 from .anime2sketch import anime2sketch_to_gray
 from .config import DrawConfig
+from .informative_drawings import informative_drawings_to_gray
 
 
 OFFSETS_8 = [
@@ -57,13 +59,14 @@ def make_paths(original_image: Image.Image | None, c: DrawConfig, should_stop=No
     if c.method == "中心线追踪(线稿)":
         return make_centerline_paths(gray, c)
 
-    if c.method == "动漫线稿(Anime2Sketch)":
-        lineart = anime2sketch_to_gray(
-            rgb,
-            c.anime2sketch_model_path,
-            c.anime2sketch_input_size,
-            c.anime2sketch_device,
-        )
+    model_methods = {
+        "动漫线稿(Anime2Sketch)": (anime2sketch_to_gray, c.anime2sketch_model_path),
+        "动漫精细线稿(AniLines)": (anilines_to_gray, c.anilines_model_path),
+        "通用语义线稿(Informative Drawings)": (informative_drawings_to_gray, c.informative_drawings_model_path),
+    }
+    if c.method in model_methods:
+        converter, model_path = model_methods[c.method]
+        lineart = converter(rgb, model_path, c.anime2sketch_input_size, c.anime2sketch_device)
         model_config = DrawConfig(**{**c.__dict__, "dark_as_line": True})
         return make_centerline_paths(lineart, model_config)
 

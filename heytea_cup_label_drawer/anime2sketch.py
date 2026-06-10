@@ -63,9 +63,9 @@ def _import_torch():
         import torch
         import torch.nn as nn
         import torch.nn.functional as f
-    except ImportError as exc:
+    except (ImportError, OSError) as exc:
         raise RuntimeError(
-            "Anime2Sketch 模式需要安装 PyTorch。请先运行：pip install torch"
+            f"PyTorch 无法加载：{exc}\n请安装可用的 PyTorch，并确认 Windows Visual C++ 运行库完整。"
         ) from exc
     return torch, nn, f
 

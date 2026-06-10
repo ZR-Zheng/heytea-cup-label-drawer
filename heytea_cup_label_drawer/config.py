@@ -7,6 +7,8 @@ APP_DIR = Path(__file__).resolve().parent.parent
 DEFAULT_CONFIG_PATH = APP_DIR / "heytea_draw_config_centerline.json"
 MODELS_DIR = APP_DIR / "models"
 ANIME2SKETCH_MODELS_DIR = MODELS_DIR / "anime2sketch"
+ANILINES_MODELS_DIR = MODELS_DIR / "anilines"
+INFORMATIVE_DRAWINGS_MODELS_DIR = MODELS_DIR / "informative_drawings"
 
 
 @dataclass
@@ -32,6 +34,8 @@ class DrawConfig:
 
     # Anime2Sketch 模式：用模型先把彩图/插画转成黑白线稿，再按中心线追踪绘制。
     anime2sketch_model_path: str = ""
+    anilines_model_path: str = ""
+    informative_drawings_model_path: str = ""
     anime2sketch_input_size: int = 512
     anime2sketch_device: str = "auto"
 

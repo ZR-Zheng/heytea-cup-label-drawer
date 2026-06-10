@@ -49,6 +49,20 @@ class CenterlineTracingTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "Anime2Sketch 模型权重文件"):
             make_paths(image, config)
 
+    def test_anilines_requires_model_path_before_torch(self):
+        image, _ = blank_line_art()
+        config = DrawConfig(canvas_w=100, canvas_h=100, padding=0, method="动漫精细线稿(AniLines)")
+
+        with self.assertRaisesRegex(RuntimeError, "AniLines Detail"):
+            make_paths(image, config)
+
+    def test_informative_drawings_requires_model_path_before_runtime(self):
+        image, _ = blank_line_art()
+        config = DrawConfig(canvas_w=100, canvas_h=100, padding=0, method="通用语义线稿(Informative Drawings)")
+
+        with self.assertRaisesRegex(RuntimeError, "Informative Drawings ONNX"):
+            make_paths(image, config)
+
 
 if __name__ == "__main__":
     unittest.main()
