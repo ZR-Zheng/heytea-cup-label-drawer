@@ -14,7 +14,7 @@ pip install pyautogui opencv-python pillow numpy
 pip install -e ".[anime]"
 ```
 
-然后在界面中选择 Anime2Sketch 的 `netG.pth` 或 `improved.bin` 权重文件。
+然后通过界面的“导入”按钮添加 Anime2Sketch 的 `netG.pth` 或 `improved.bin` 权重文件。程序会将模型统一保存至 `models/anime2sketch/`。
 
 ## 运行
 
@@ -30,6 +30,7 @@ python heytea_cup_label_drawer_gui.py
 
 ## 目录结构
 
+- `models/`：统一管理模型文件；不同模型类型使用独立子目录。模型权重不会提交到 Git。
 - `heytea_cup_label_drawer/config.py`：配置模型和默认配置文件路径。
 - `heytea_cup_label_drawer/anime2sketch.py`：Anime2Sketch 模型推理，使用 PyTorch 懒加载。
 - `heytea_cup_label_drawer/processing.py`：图片预处理、Anime2Sketch 线稿提取、中心线追踪、轮廓路径和逐行扫描算法。中心线模式采用细化骨架、方向桥接、短毛刺剪枝和角度感知路径追踪。

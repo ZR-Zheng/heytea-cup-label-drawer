@@ -2,6 +2,7 @@
 
 import json
 import os
+import shutil
 import threading
 import time
 from dataclasses import asdict
@@ -13,7 +14,7 @@ from PIL import Image, ImageTk
 from tkinter import filedialog, messagebox, ttk
 
 from .automation import countdown_in_worker, draw_screen_polyline, map_point_to_screen, safe_mouse_up
-from .config import APP_DIR, DEFAULT_CONFIG_PATH, DrawConfig
+from .config import ANIME2SKETCH_MODELS_DIR, DEFAULT_CONFIG_PATH, MODELS_DIR, DrawConfig
 from .processing import flatten_image, make_paths
 
 
@@ -26,7 +27,7 @@ PARAMETER_HELP = {
     "模糊强度": "预处理时使用的模糊核大小。可填 0、1、3、5、7 或 9；数值越大，细节越少、线条越平滑。",
     "黑白阈值": "区分线条与背景的灰度界线，范围 0~255。值越大，更多较浅区域会被识别为深色线条。",
     "断线连接像素": "尝试连接相距较近的断点。建议 1~2；过大可能把相邻线条错误连接。",
-    "模型权重文件": "Anime2Sketch 使用的模型权重文件，支持 netG.pth 或 improved.bin。",
+    "模型权重文件": "Anime2Sketch 使用的模型权重文件。导入的 .pth 或 .bin 文件统一保存在 models/anime2sketch 文件夹。",
     "模型输入尺寸": "送入 Anime2Sketch 模型的正方形边长。推荐 512；越大细节越多，但处理更慢、占用内存更多。",
     "运行设备": "Anime2Sketch 推理设备。auto 自动选择，cpu 使用处理器，cuda 使用 NVIDIA 显卡。",
     "低阈值": "Canny 边缘检测的低阈值。降低会保留更多弱边缘，也可能引入噪点。",
@@ -144,10 +145,12 @@ class HeyTeaCupLabelDrawerGUI:
         self.worker_thread: threading.Thread | None = None
         self.calib_top_left: tuple[int, int] | None = None
         self.parameter_tips: list[HoverTip] = []
+        ANIME2SKETCH_MODELS_DIR.mkdir(parents=True, exist_ok=True)
 
         self._build_ui()
         self.load_config(silent=True)
         self._sync_config_to_vars()
+        self.refresh_anime2sketch_models(silent=True)
         self.method_var.trace_add("write", lambda *_: self._update_param_visibility())
         self._update_param_visibility()
         self._log("准备就绪。先选择图片并标定画布，再刷新预览。")
@@ -285,6 +288,7 @@ class HeyTeaCupLabelDrawerGUI:
             ],
         )
         ttk.Label(self.section_anime2sketch, text="运行设备可填写 auto、cpu 或 cuda。", style="Hint.TLabel").pack(anchor="w", padx=10, pady=(2, 9))
+        ttk.Button(self.section_anime2sketch, text="打开模型文件夹", command=self.open_models_folder).pack(fill=tk.X, padx=10, pady=(0, 9))
 
         self.section_canny = self._create_param_section(self.dynamic_param_frame, "Canny 边缘")
         self._add_entry_specs(
@@ -579,7 +583,7 @@ class HeyTeaCupLabelDrawerGUI:
         self.anime2sketch_model_combo.pack(side=tk.LEFT, fill=tk.X, expand=True)
         self.anime2sketch_model_combo.bind("<<ComboboxSelected>>", lambda _e: self._select_anime2sketch_model())
         ttk.Button(row, text="刷新", command=self.refresh_anime2sketch_models).pack(side=tk.LEFT, padx=(4, 0))
-        ttk.Button(row, text="选择文件", command=self.choose_anime2sketch_model).pack(side=tk.LEFT, padx=(4, 0))
+        ttk.Button(row, text="导入", command=self.choose_anime2sketch_model).pack(side=tk.LEFT, padx=(4, 0))
         return row
 
     def _add_parameter_tip(self, widget: tk.Widget, label: str):
@@ -922,6 +926,8 @@ class HeyTeaCupLabelDrawerGUI:
                 payload = json.load(f)
 
             known = {k: v for k, v in payload.items() if k in DrawConfig.__dataclass_fields__}
+            if "anime2sketch_model_path" in known:
+                known["anime2sketch_model_path"] = self._resolve_model_path(known["anime2sketch_model_path"])
             self.config = DrawConfig(**known)
             self._sync_config_to_vars()
 
@@ -962,9 +968,8 @@ class HeyTeaCupLabelDrawerGUI:
 
     def _discover_anime2sketch_models(self) -> dict[str, str]:
         models: dict[str, str] = {}
-        ignored_dirs = {".git", "venv", "__pycache__", ".pytest_cache", "build", "dist"}
-        for cur_dir, dir_names, file_names in os.walk(APP_DIR):
-            dir_names[:] = [name for name in dir_names if name not in ignored_dirs]
+        ANIME2SKETCH_MODELS_DIR.mkdir(parents=True, exist_ok=True)
+        for cur_dir, _dir_names, file_names in os.walk(ANIME2SKETCH_MODELS_DIR):
             for file_name in file_names:
                 if os.path.splitext(file_name)[1].lower() not in (".pth", ".bin"):
                     continue
@@ -976,7 +981,7 @@ class HeyTeaCupLabelDrawerGUI:
     def _model_choice_label(self, path: str) -> str:
         p = os.path.abspath(path)
         try:
-            rel = os.path.relpath(p, APP_DIR)
+            rel = os.path.relpath(p, ANIME2SKETCH_MODELS_DIR)
             if not rel.startswith(".."):
                 return rel
         except ValueError:
@@ -1005,7 +1010,8 @@ class HeyTeaCupLabelDrawerGUI:
 
     def choose_anime2sketch_model(self):
         path = filedialog.askopenfilename(
-            title="选择 Anime2Sketch 模型权重",
+            title="导入 Anime2Sketch 模型权重",
+            initialdir=str(ANIME2SKETCH_MODELS_DIR),
             filetypes=[
                 ("Anime2Sketch 权重", "*.pth *.bin"),
                 ("所有文件", "*.*"),
@@ -1013,10 +1019,48 @@ class HeyTeaCupLabelDrawerGUI:
         )
         if not path:
             return
-        self.anime2sketch_model_path_var.set(path)
+        try:
+            imported_path = self._import_model_file(path)
+        except Exception as e:
+            messagebox.showerror("模型导入失败", str(e))
+            return
+        self.anime2sketch_model_path_var.set(imported_path)
         self.refresh_anime2sketch_models(silent=True)
-        self._set_anime2sketch_model_choice(path)
-        self._log(f"已选择 Anime2Sketch 模型：{path}")
+        self._set_anime2sketch_model_choice(imported_path)
+        self._log(f"模型已导入：{imported_path}")
+
+    def open_models_folder(self):
+        MODELS_DIR.mkdir(parents=True, exist_ok=True)
+        try:
+            os.startfile(MODELS_DIR)
+        except AttributeError:
+            messagebox.showinfo("模型文件夹", str(MODELS_DIR))
+
+    def _import_model_file(self, path: str) -> str:
+        source = os.path.abspath(path)
+        if os.path.splitext(source)[1].lower() not in (".pth", ".bin"):
+            raise ValueError("仅支持 .pth 或 .bin 模型文件。")
+
+        ANIME2SKETCH_MODELS_DIR.mkdir(parents=True, exist_ok=True)
+        destination = os.path.abspath(ANIME2SKETCH_MODELS_DIR / os.path.basename(source))
+        if os.path.normcase(source) == os.path.normcase(destination):
+            return destination
+        if os.path.exists(destination) and not messagebox.askyesno("覆盖模型", f"模型文件已存在：\n{destination}\n\n是否覆盖？"):
+            return destination
+        shutil.copy2(source, destination)
+        return destination
+
+    def _resolve_model_path(self, path: str) -> str:
+        if not path:
+            return ""
+        expanded = os.path.abspath(os.path.expanduser(path))
+        if os.path.exists(expanded):
+            return expanded
+
+        migrated = ANIME2SKETCH_MODELS_DIR / os.path.basename(path)
+        if migrated.exists():
+            return str(migrated.resolve())
+        return path
 
     def choose_image(self):
         path = filedialog.askopenfilename(

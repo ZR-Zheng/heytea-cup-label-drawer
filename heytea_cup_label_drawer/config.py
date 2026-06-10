@@ -5,6 +5,8 @@ from pathlib import Path
 
 APP_DIR = Path(__file__).resolve().parent.parent
 DEFAULT_CONFIG_PATH = APP_DIR / "heytea_draw_config_centerline.json"
+MODELS_DIR = APP_DIR / "models"
+ANIME2SKETCH_MODELS_DIR = MODELS_DIR / "anime2sketch"
 
 
 @dataclass

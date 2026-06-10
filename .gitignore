@@ -8,4 +8,5 @@ dist/
 build/
 *.egg-info/
 heytea_draw_config_centerline.json
-netG.pth
+models/**/*.pth
+models/**/*.bin
