@@ -1,9 +1,18 @@
 import unittest
+from unittest.mock import patch
 
+import numpy as np
 from PIL import Image, ImageDraw
 
 from heytea_cup_label_drawer.config import ANILINES_MODELS_DIR, INFORMATIVE_DRAWINGS_MODELS_DIR, DrawConfig
-from heytea_cup_label_drawer.processing import make_paths, polyline_length
+from heytea_cup_label_drawer.processing import (
+    make_paths,
+    make_raster_paths,
+    order_paths_greedy,
+    polyline_length,
+    trace_skeleton_paths,
+    zhang_suen_thinning,
+)
 
 
 def blank_line_art(size=(100, 100)):
@@ -12,6 +21,27 @@ def blank_line_art(size=(100, 100)):
 
 
 class CenterlineTracingTests(unittest.TestCase):
+    def test_thinning_reduces_thick_line_to_single_pixel_centerline(self):
+        mask = np.zeros((15, 25), dtype=bool)
+        mask[5:10, 3:22] = True
+
+        skeleton = zhang_suen_thinning(mask)
+
+        self.assertTrue(skeleton.any())
+        self.assertLessEqual(int(skeleton[:, 6:19].sum(axis=0).max()), 1)
+
+    def test_disconnected_skeleton_is_traced_as_continuous_strokes(self):
+        skeleton = np.zeros((12, 20), dtype=bool)
+        skeleton[2, 2:8] = True
+        skeleton[8, 11:18] = True
+
+        paths = trace_skeleton_paths(skeleton)
+
+        self.assertEqual(len(paths), 2)
+        for path in paths:
+            steps = np.abs(np.diff(path, axis=0))
+            self.assertTrue(np.all(steps.max(axis=1) <= 1))
+
     def test_arc_traces_as_one_main_path(self):
         image, draw = blank_line_art()
         draw.arc((15, 15, 85, 85), start=20, end=330, fill="black", width=4)
@@ -42,6 +72,73 @@ class CenterlineTracingTests(unittest.TestCase):
         self.assertEqual(len(paths), 1)
         self.assertGreater(polyline_length(paths[0]), 70)
 
+
+class GreedyPathOrderingTests(unittest.TestCase):
+    def test_selects_nearest_next_stroke_and_reverses_it(self):
+        paths = [
+            np.array([[10, 0], [20, 0]], dtype=np.int32),
+            np.array([[40, 0], [30, 0]], dtype=np.int32),
+            np.array([[2, 0], [4, 0]], dtype=np.int32),
+        ]
+
+        ordered = order_paths_greedy(paths)
+
+        self.assertEqual([path.tolist() for path in ordered], [
+            [[2, 0], [4, 0]],
+            [[10, 0], [20, 0]],
+            [[30, 0], [40, 0]],
+        ])
+
+    def test_retrace_orders_from_actual_returned_mouse_position(self):
+        paths = [
+            np.array([[1, 0], [100, 0]], dtype=np.int32),
+            np.array([[4, 0], [5, 0]], dtype=np.int32),
+            np.array([[90, 0], [95, 0]], dtype=np.int32),
+        ]
+
+        ordered = order_paths_greedy(paths, retrace=True)
+
+        self.assertEqual([path[0].tolist() for path in ordered], [[1, 0], [4, 0], [90, 0]])
+
+
+class ContourRetraceTests(unittest.TestCase):
+    @patch("heytea_cup_label_drawer.processing.order_paths_greedy", wraps=order_paths_greedy)
+    def test_black_white_contour_orders_from_retraced_mouse_position(self, order_paths):
+        image, draw = blank_line_art()
+        draw.rectangle((20, 20, 80, 80), fill="black")
+        config = DrawConfig(
+            canvas_w=100,
+            canvas_h=100,
+            padding=0,
+            method="黑白轮廓(阈值)",
+            contour_retrace=True,
+        )
+
+        make_paths(image, config)
+
+        self.assertTrue(order_paths.call_args.kwargs["retrace"])
+
+
+class RasterPathTests(unittest.TestCase):
+    def test_zero_length_raster_point_is_not_shown_as_drawable_path(self):
+        gray = np.full((3, 5), 255, dtype=np.uint8)
+        gray[1, 2] = 0
+        config = DrawConfig(
+            threshold=128,
+            dark_as_line=True,
+            raster_row_step=1,
+            raster_min_run=1,
+            raster_gap_tolerance=0,
+            raster_extend_px=0,
+        )
+
+        paths, preview = make_raster_paths(gray, config)
+
+        self.assertEqual(paths, [])
+        self.assertTrue(np.all(preview == 255))
+
+
+class ModelLineArtTests(unittest.TestCase):
     def test_anime2sketch_requires_model_path_before_torch(self):
         image, _ = blank_line_art()
         config = DrawConfig(canvas_w=100, canvas_h=100, padding=0, method="动漫线稿(Anime2Sketch)")

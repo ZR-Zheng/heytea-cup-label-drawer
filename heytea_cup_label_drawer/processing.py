@@ -83,7 +83,6 @@ def make_paths(original_image: Image.Image | None, c: DrawConfig, should_stop=No
         contours, _ = cv2.findContours(edges, cv2.RETR_LIST, cv2.CHAIN_APPROX_NONE)
         debug = 255 - edges  # 黑线白底
 
-    paths: list[np.ndarray] = []
     scored: list[tuple[float, np.ndarray]] = []
 
     for contour in contours:
@@ -107,8 +106,8 @@ def make_paths(original_image: Image.Image | None, c: DrawConfig, should_stop=No
 
     # 先画较长路径，减少碎线优先级。
     scored.sort(key=lambda item: item[0], reverse=True)
-    for _, pts in scored[: c.max_paths]:
-        paths.append(pts)
+    selected = [pts for _, pts in scored[: c.max_paths]]
+    paths = order_paths_greedy(selected, retrace=c.method == "黑白轮廓(阈值)" and c.contour_retrace)
 
     return paths, debug
 
@@ -171,7 +170,8 @@ def make_centerline_paths(gray: np.ndarray, c: DrawConfig) -> tuple[list[np.ndar
         scored.append((length, approx.astype(np.int32)))
 
     scored.sort(key=lambda item: item[0], reverse=True)
-    paths = [pts for _, pts in scored[: c.max_paths]]
+    selected = [pts for _, pts in scored[: c.max_paths]]
+    paths = order_paths_greedy(selected, retrace=c.centerline_retrace)
 
     h, w = gray.shape[:2]
     debug = np.full((h, w), 255, dtype=np.uint8)
@@ -524,6 +524,75 @@ def polyline_length(pts: np.ndarray) -> float:
     diffs = np.diff(pts.astype(np.float32), axis=0)
     return float(np.sqrt((diffs * diffs).sum(axis=1)).sum())
 
+
+def order_paths_greedy(
+    paths: list[np.ndarray],
+    start: np.ndarray | tuple[int, int] = (0, 0),
+    retrace: bool = False,
+) -> list[np.ndarray]:
+    """按最近端点排列笔画，并在反向更近时反转整条笔画。"""
+    remaining = [np.asarray(path) for path in paths if path is not None and len(path) >= 2]
+    if not remaining:
+        return []
+
+    cell_size = 8
+    buckets: dict[tuple[int, int], dict[tuple[int, bool], None]] = {}
+
+    def cell_of(point: np.ndarray) -> tuple[int, int]:
+        return int(np.floor(float(point[0]) / cell_size)), int(np.floor(float(point[1]) / cell_size))
+
+    for index, path in enumerate(remaining):
+        for reverse, point in ((False, path[0]), (True, path[-1])):
+            buckets.setdefault(cell_of(point), {})[(index, reverse)] = None
+
+    def ring_cells(cx: int, cy: int, radius: int):
+        if radius == 0:
+            yield cx, cy
+            return
+        for x in range(cx - radius, cx + radius + 1):
+            yield x, cy - radius
+            yield x, cy + radius
+        for y in range(cy - radius + 1, cy + radius):
+            yield cx - radius, y
+            yield cx + radius, y
+
+    def nearest_endpoint(point: np.ndarray) -> tuple[int, bool]:
+        cx, cy = cell_of(point)
+        best: tuple[float, int, bool] | None = None
+        radius = 0
+
+        while best is None or radius * cell_size <= best[0] ** 0.5 + cell_size:
+            for cell in ring_cells(cx, cy, radius):
+                for index, reverse in buckets.get(cell, {}):
+                    endpoint = remaining[index][-1 if reverse else 0].astype(np.float64)
+                    delta = endpoint - point
+                    candidate = (float(delta.dot(delta)), index, reverse)
+                    if best is None or candidate < best:
+                        best = candidate
+            radius += 1
+
+        if best is None:
+            raise RuntimeError("路径端点索引为空。")
+        return best[1], best[2]
+
+    ordered: list[np.ndarray] = []
+    current = np.asarray(start, dtype=np.float64)
+
+    for _ in range(len(remaining)):
+        best_index, best_reverse = nearest_endpoint(current)
+        selected = remaining[best_index]
+        for reverse, endpoint in ((False, selected[0]), (True, selected[-1])):
+            buckets[cell_of(endpoint)].pop((best_index, reverse), None)
+
+        if best_reverse:
+            selected = selected[::-1].copy()
+
+        ordered.append(selected)
+        current = selected[0 if retrace else -1].astype(np.float64)
+
+    return ordered
+
+
 def make_raster_paths(gray: np.ndarray, c: DrawConfig, should_stop=None) -> tuple[list[np.ndarray], np.ndarray]:
     """逐行扫描：把二值图中需要绘制的区域转成水平短线。
 
@@ -554,7 +623,7 @@ def make_raster_paths(gray: np.ndarray, c: DrawConfig, should_stop=None) -> tupl
         for x1, x2 in runs:
             x1e = max(0, int(x1) - c.raster_extend_px)
             x2e = min(w - 1, int(x2) + c.raster_extend_px)
-            if x2e >= x1e:
+            if x2e > x1e:
                 expanded_runs.append((x1e, x2e))
         runs = expanded_runs
 

@@ -14,6 +14,19 @@ pyautogui.PAUSE = 0.002
 pyautogui.FAILSAFE = True
 
 
+def should_retrace_path(c: DrawConfig) -> bool:
+    """返回当前模式是否需要在完成路径后反向补画一次。"""
+    centerline_methods = {
+        "中心线追踪(线稿)",
+        "动漫线稿(Anime2Sketch)",
+        "动漫精细线稿(AniLines)",
+        "通用语义线稿(Informative Drawings)",
+    }
+    if c.method in centerline_methods:
+        return c.centerline_retrace
+    return c.method == "黑白轮廓(阈值)" and c.contour_retrace
+
+
 def draw_screen_polyline(c: DrawConfig, points: list[tuple[int, int]], stop_event, is_raster_line: bool = False):
     """按下鼠标绘制一条屏幕坐标折线。
 
@@ -49,7 +62,11 @@ def draw_screen_polyline(c: DrawConfig, points: list[tuple[int, int]], stop_even
             draw_smooth_segment(c, int(cur.x), int(cur.y), int(x2), int(y2), stop_event, is_raster_line=is_raster_line)
 
         # 横线往返补笔：仅对逐行扫描横线生效。同一笔不抬笔返回，通常比重复落笔更稳。
-        if is_raster_line and c.raster_backtrack and not stop_event.is_set():
+        if (
+            is_raster_line
+            and (c.raster_backtrack or raster_line_needs_confirmation(c, points))
+            and not stop_event.is_set()
+        ):
             x_back, y_back = points[0]
             cur = pyautogui.position()
             draw_smooth_segment(c, int(cur.x), int(cur.y), int(x_back), int(y_back), stop_event, is_raster_line=True)
@@ -90,6 +107,17 @@ def effective_pen_down_pause(c: DrawConfig, is_raster_line: bool = False) -> flo
     return max(float(c.pen_down_pause or 0.0), minimum)
 
 
+def raster_line_needs_confirmation(c: DrawConfig, points: list[tuple[int, int]]) -> bool:
+    """短扫描线容易被画布当成点击；沿原线返回一次可可靠成笔且不会画到预览外。"""
+    if len(points) < 2:
+        return False
+    x1, y1 = points[0]
+    x2, y2 = points[-1]
+    distance = float(((x2 - x1) ** 2 + (y2 - y1) ** 2) ** 0.5)
+    reliable_drag_distance = max(8.0, float(c.mouse_step_px * 3), float(c.pen_down_nudge_px * 2))
+    return distance <= reliable_drag_distance
+
+
 def draw_smooth_segment(c: DrawConfig, x1: int, y1: int, x2: int, y2: int, stop_event, is_raster_line: bool = False):
     """把一个线段拆成很多小 move，确保微信小程序 canvas 收到足够多的鼠标移动事件。"""
     dx = x2 - x1
@@ -99,7 +127,8 @@ def draw_smooth_segment(c: DrawConfig, x1: int, y1: int, x2: int, y2: int, stop_
         return
 
     # 每隔 mouse_step_px 像素发一个 move 事件；步距越小越细，但越慢。
-    steps = max(1, int(np.ceil(dist / max(1, c.mouse_step_px))))
+    minimum_steps = 4 if is_raster_line else 1
+    steps = max(minimum_steps, int(np.ceil(dist / max(1, c.mouse_step_px))))
 
     # 长线按距离增加持续时间；短横线也保证最短持续时间，避免被当成一次无效点击。
     duration_by_distance = dist / 100.0 * c.stroke_duration_per_100px

@@ -13,7 +13,7 @@ import tkinter as tk
 from PIL import Image, ImageTk
 from tkinter import filedialog, messagebox, ttk
 
-from .automation import countdown_in_worker, draw_screen_polyline, map_point_to_screen, safe_mouse_up
+from .automation import countdown_in_worker, draw_screen_polyline, map_point_to_screen, safe_mouse_up, should_retrace_path
 from .config import (
     ANILINES_MODELS_DIR,
     ANIME2SKETCH_MODELS_DIR,
@@ -62,8 +62,9 @@ PARAMETER_HELP = {
     "保持图片比例并居中": "缩放图片时保持原始宽高比，并将内容放在画布中央，避免图像被拉伸。",
     "深色区域作为线条": "启用后将比阈值更暗的区域识别为线条；关闭后则识别较亮区域。",
     "反向补笔（防空笔，更慢）": "中心线路径完成后沿原路反向再画一次，可降低空笔概率，但绘制时间接近翻倍。",
+    "轮廓反向补笔（防空笔，更慢）": "黑白轮廓路径完成后沿原路反向再画一次，可降低空笔和轮廓缺失概率，但绘制时间接近翻倍。",
     "蛇形顺序减少空移": "让相邻扫描行交替从左向右和从右向左绘制，减少鼠标在行间空移。",
-    "横线往返补笔（更黑更慢）": "每条扫描横线完成后沿原路返回，可让填充更深，但绘制时间更长。",
+    "横线往返补笔（更黑更慢）": "每条扫描横线完成后沿原路返回，可让填充更深，但绘制时间更长。关闭时，容易被识别为点击的短横线仍会自动沿原路返回一次以防空笔。",
     "绘制时最小化本窗口": "开始正式绘制时自动最小化工具窗口，结束后恢复，避免遮挡目标画布。",
 }
 
@@ -350,6 +351,9 @@ class HeyTeaCupLabelDrawerGUI:
             ],
         )
 
+        self.section_contour = self._create_param_section(self.dynamic_param_frame, "黑白轮廓补笔")
+        self._add_checkbutton(self.section_contour, "轮廓反向补笔（防空笔，更慢）", self.contour_retrace_var, pady=(3, 9))
+
         self.section_raster = self._create_param_section(self.dynamic_param_frame, "逐行扫描")
         self._add_entry_specs(
             self.section_raster,
@@ -467,6 +471,7 @@ class HeyTeaCupLabelDrawerGUI:
         self.pen_up_pause_var = tk.StringVar()
         self.between_strokes_pause_var = tk.StringVar()
         self.centerline_retrace_var = tk.BooleanVar()
+        self.contour_retrace_var = tk.BooleanVar()
         self.raster_backtrack_var = tk.BooleanVar()
         self.move_duration_var = tk.StringVar()
         self.start_delay_var = tk.StringVar()
@@ -645,6 +650,7 @@ class HeyTeaCupLabelDrawerGUI:
             self.section_anime2sketch,
             self.section_canny,
             self.section_path,
+            self.section_contour,
             self.section_raster,
         ]
         for section in method_sections:
@@ -708,6 +714,7 @@ class HeyTeaCupLabelDrawerGUI:
             sections = [
                 self.section_binary,
                 self.section_path,
+                self.section_contour,
             ]
 
         self._show_param_sections(sections)
@@ -849,6 +856,7 @@ class HeyTeaCupLabelDrawerGUI:
                 "pen_up_pause": 0.020,
                 "between_strokes_pause": 0.012,
                 "centerline_retrace": False,
+                "contour_retrace": True,
             },
         }.get(method, {})
 
@@ -911,6 +919,7 @@ class HeyTeaCupLabelDrawerGUI:
         self.pen_up_pause_var.set(str(c.pen_up_pause))
         self.between_strokes_pause_var.set(str(c.between_strokes_pause))
         self.centerline_retrace_var.set(c.centerline_retrace)
+        self.contour_retrace_var.set(c.contour_retrace)
         self.raster_backtrack_var.set(c.raster_backtrack)
         self.move_duration_var.set(str(c.move_duration))
         self.start_delay_var.set(str(c.start_delay))
@@ -968,6 +977,7 @@ class HeyTeaCupLabelDrawerGUI:
                 pen_up_pause=max(0.0, float(self.pen_up_pause_var.get())),
                 between_strokes_pause=max(0.0, float(self.between_strokes_pause_var.get())),
                 centerline_retrace=bool(self.centerline_retrace_var.get()),
+                contour_retrace=bool(self.contour_retrace_var.get()),
                 raster_backtrack=bool(self.raster_backtrack_var.get()),
 
                 start_delay=max(0, int(float(self.start_delay_var.get()))),
@@ -1395,7 +1405,7 @@ class HeyTeaCupLabelDrawerGUI:
                 screen_points = [map_point_to_screen(c, p) for p in pts]
                 is_raster_line = (c.method == "逐行扫描(横向)" and len(screen_points) == 2)
                 draw_screen_polyline(c, screen_points, self.stop_event, is_raster_line=is_raster_line)
-                if c.method in ("中心线追踪(线稿)", *MODEL_METHODS) and c.centerline_retrace and not self.stop_event.is_set():
+                if should_retrace_path(c) and not self.stop_event.is_set():
                     draw_screen_polyline(c, list(reversed(screen_points)), self.stop_event, is_raster_line=False)
 
                 drawn += 1
