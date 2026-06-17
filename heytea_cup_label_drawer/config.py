@@ -65,6 +65,7 @@ class DrawConfig:
     between_strokes_pause: float = 0.012
     centerline_retrace: bool = True
     contour_retrace: bool = True
+    contour_lineart_optimize: bool = False
     raster_backtrack: bool = False
 
     start_delay: int = 3

@@ -73,7 +73,8 @@ def make_paths(original_image: Image.Image | None, c: DrawConfig, should_stop=No
     if c.method == "逐行扫描(横向)":
         return make_raster_paths(gray, c, should_stop=should_stop)
 
-    if c.method == "黑白轮廓(阈值)":
+    is_black_white_contour = c.method == "黑白轮廓(阈值)"
+    if is_black_white_contour:
         thresh_type = cv2.THRESH_BINARY_INV if c.dark_as_line else cv2.THRESH_BINARY
         _, binary = cv2.threshold(gray, c.threshold, 255, thresh_type)
         contours, _ = cv2.findContours(binary, cv2.RETR_LIST, cv2.CHAIN_APPROX_NONE)
@@ -89,11 +90,18 @@ def make_paths(original_image: Image.Image | None, c: DrawConfig, should_stop=No
         if contour is None or len(contour) < 2:
             continue
 
-        arc = cv2.arcLength(contour, closed=False)
+        path_contour = contour
+        if is_black_white_contour and c.contour_lineart_optimize:
+            single_side = contour_single_side_path(contour)
+            if single_side is None or len(single_side) < 2:
+                continue
+            path_contour = single_side.reshape(-1, 1, 2)
+
+        arc = cv2.arcLength(path_contour, closed=False)
         if arc < c.min_path_len:
             continue
 
-        approx = cv2.approxPolyDP(contour, c.epsilon, closed=False)
+        approx = cv2.approxPolyDP(path_contour, c.epsilon, closed=False)
         pts = approx.reshape(-1, 2)
 
         if c.point_step > 1:
@@ -107,9 +115,62 @@ def make_paths(original_image: Image.Image | None, c: DrawConfig, should_stop=No
     # 先画较长路径，减少碎线优先级。
     scored.sort(key=lambda item: item[0], reverse=True)
     selected = [pts for _, pts in scored[: c.max_paths]]
-    paths = order_paths_greedy(selected, retrace=c.method == "黑白轮廓(阈值)" and c.contour_retrace)
+    should_retrace_contour = is_black_white_contour and c.contour_retrace and not c.contour_lineart_optimize
+    paths = order_paths_greedy(selected, retrace=should_retrace_contour)
+
+    if is_black_white_contour and c.contour_lineart_optimize:
+        h, w = gray.shape[:2]
+        debug = np.full((h, w), 255, dtype=np.uint8)
+        for pts in paths:
+            cv2.polylines(debug, [pts.reshape(-1, 1, 2)], isClosed=False, color=0, thickness=1)
 
     return paths, debug
+
+
+def contour_single_side_path(contour: np.ndarray) -> np.ndarray | None:
+    """把闭合轮廓环切成单侧路径，避免黑白线稿粗笔画被描成双边。"""
+    pts = contour.reshape(-1, 2).astype(np.int32)
+    if len(pts) < 4:
+        return pts if len(pts) >= 2 else None
+
+    if np.array_equal(pts[0], pts[-1]):
+        pts = pts[:-1]
+    if len(pts) < 4:
+        return pts if len(pts) >= 2 else None
+
+    centered = pts.astype(np.float32) - pts.astype(np.float32).mean(axis=0)
+    cov = centered.T @ centered
+    if float(np.abs(cov).sum()) <= 0:
+        return pts[:2]
+
+    eigenvalues, eigenvectors = np.linalg.eigh(cov)
+    axis = eigenvectors[:, int(np.argmax(eigenvalues))]
+    projected = centered @ axis
+    start = int(np.argmin(projected))
+    end = int(np.argmax(projected))
+    if start == end:
+        end = (start + len(pts) // 2) % len(pts)
+
+    arc_a = contour_arc_between(pts, start, end)
+    arc_b = contour_arc_between(pts, end, start)
+    if len(arc_a) < 2:
+        return arc_b if len(arc_b) >= 2 else None
+    if len(arc_b) < 2:
+        return arc_a
+
+    length_a = polyline_length(arc_a)
+    length_b = polyline_length(arc_b)
+    if length_a < length_b:
+        return arc_a
+    if length_b < length_a:
+        return arc_b
+    return arc_a if tuple(arc_a[0]) <= tuple(arc_b[0]) else arc_b
+
+
+def contour_arc_between(pts: np.ndarray, start: int, end: int) -> np.ndarray:
+    if start <= end:
+        return pts[start : end + 1].copy()
+    return np.concatenate((pts[start:], pts[: end + 1])).copy()
 
 def make_centerline_paths(gray: np.ndarray, c: DrawConfig) -> tuple[list[np.ndarray], np.ndarray]:
     """中心线追踪：适合黑色线稿。

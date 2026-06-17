@@ -63,6 +63,7 @@ PARAMETER_HELP = {
     "深色区域作为线条": "启用后将比阈值更暗的区域识别为线条；关闭后则识别较亮区域。",
     "反向补笔（防空笔，更慢）": "中心线路径完成后沿原路反向再画一次，可降低空笔概率，但绘制时间接近翻倍。",
     "轮廓反向补笔（防空笔，更慢）": "黑白轮廓路径完成后沿原路反向再画一次，可降低空笔和轮廓缺失概率，但绘制时间接近翻倍。",
+    "黑白线稿图优化（只画单边）": "用于已经处理好的黑白线稿图：每个粗笔画轮廓只保留单侧路径，避免沿黑线两侧描边导致笔画变粗。启用后不会执行轮廓反向补笔。",
     "蛇形顺序减少空移": "让相邻扫描行交替从左向右和从右向左绘制，减少鼠标在行间空移。",
     "横线往返补笔（更黑更慢）": "每条扫描横线完成后沿原路返回，可让填充更深，但绘制时间更长。关闭时，容易被识别为点击的短横线仍会自动沿原路返回一次以防空笔。",
     "绘制时最小化本窗口": "开始正式绘制时自动最小化工具窗口，结束后恢复，避免遮挡目标画布。",
@@ -351,7 +352,8 @@ class HeyTeaCupLabelDrawerGUI:
             ],
         )
 
-        self.section_contour = self._create_param_section(self.dynamic_param_frame, "黑白轮廓补笔")
+        self.section_contour = self._create_param_section(self.dynamic_param_frame, "黑白轮廓优化")
+        self._add_checkbutton(self.section_contour, "黑白线稿图优化（只画单边）", self.contour_lineart_optimize_var, pady=(3, 2))
         self._add_checkbutton(self.section_contour, "轮廓反向补笔（防空笔，更慢）", self.contour_retrace_var, pady=(3, 9))
 
         self.section_raster = self._create_param_section(self.dynamic_param_frame, "逐行扫描")
@@ -472,6 +474,7 @@ class HeyTeaCupLabelDrawerGUI:
         self.between_strokes_pause_var = tk.StringVar()
         self.centerline_retrace_var = tk.BooleanVar()
         self.contour_retrace_var = tk.BooleanVar()
+        self.contour_lineart_optimize_var = tk.BooleanVar()
         self.raster_backtrack_var = tk.BooleanVar()
         self.move_duration_var = tk.StringVar()
         self.start_delay_var = tk.StringVar()
@@ -710,7 +713,7 @@ class HeyTeaCupLabelDrawerGUI:
                 self.section_path,
             ]
         else:
-            self.method_hint_var.set("适合 Logo/黑白图：提取黑白区域外轮廓。粗线会被描成外边缘，不适合作为中心线。")
+            self.method_hint_var.set("适合 Logo/黑白图：提取黑白区域外轮廓。若原图已是黑白线稿，可勾选单边优化避免粗笔画被双边描粗。")
             sections = [
                 self.section_binary,
                 self.section_path,
@@ -857,6 +860,7 @@ class HeyTeaCupLabelDrawerGUI:
                 "between_strokes_pause": 0.012,
                 "centerline_retrace": False,
                 "contour_retrace": True,
+                "contour_lineart_optimize": False,
             },
         }.get(method, {})
 
@@ -920,6 +924,7 @@ class HeyTeaCupLabelDrawerGUI:
         self.between_strokes_pause_var.set(str(c.between_strokes_pause))
         self.centerline_retrace_var.set(c.centerline_retrace)
         self.contour_retrace_var.set(c.contour_retrace)
+        self.contour_lineart_optimize_var.set(c.contour_lineart_optimize)
         self.raster_backtrack_var.set(c.raster_backtrack)
         self.move_duration_var.set(str(c.move_duration))
         self.start_delay_var.set(str(c.start_delay))
@@ -978,6 +983,7 @@ class HeyTeaCupLabelDrawerGUI:
                 between_strokes_pause=max(0.0, float(self.between_strokes_pause_var.get())),
                 centerline_retrace=bool(self.centerline_retrace_var.get()),
                 contour_retrace=bool(self.contour_retrace_var.get()),
+                contour_lineart_optimize=bool(self.contour_lineart_optimize_var.get()),
                 raster_backtrack=bool(self.raster_backtrack_var.get()),
 
                 start_delay=max(0, int(float(self.start_delay_var.get()))),
@@ -1250,6 +1256,8 @@ class HeyTeaCupLabelDrawerGUI:
                 self._log(f"{MODEL_METHODS[c.method]['name']} 线稿已生成：{len(paths)} 条主干路径。细节过多时可提高最短路径长度或降低最多路径数。")
             elif c.method == "中心线追踪(线稿)":
                 self._log(f"中心线已生成：{len(paths)} 条主干路径。若仍断笔，先把断线连接像素调到 2~3；若粘连，降到 1 或降低阈值。")
+            elif c.method == "黑白轮廓(阈值)" and c.contour_lineart_optimize:
+                self._log(f"黑白线稿单边路径已生成：{len(paths)} 条。已避免沿粗笔画两侧重复描边。")
             else:
                 self._log(f"线稿已生成：{len(paths)} 条路径。路径太多时可提高 epsilon、最短路径长度或降低最多路径数。")
         except Exception as e:
