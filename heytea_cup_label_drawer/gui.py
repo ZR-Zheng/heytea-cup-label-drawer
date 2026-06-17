@@ -62,7 +62,7 @@ PARAMETER_HELP = {
     "保持图片比例并居中": "缩放图片时保持原始宽高比，并将内容放在画布中央，避免图像被拉伸。",
     "深色区域作为线条": "启用后将比阈值更暗的区域识别为线条；关闭后则识别较亮区域。",
     "反向补笔（防空笔，更慢）": "中心线路径完成后沿原路反向再画一次，可降低空笔概率，但绘制时间接近翻倍。",
-    "单线反向补笔（防空笔，更慢）": "黑白阈值路径完成后沿原路反向再画一次，可降低空笔概率，但绘制时间接近翻倍。",
+    "轮廓反向补笔（防空笔，更慢）": "黑白轮廓路径完成后沿原路反向再画一次，可降低空笔和轮廓缺失概率，但绘制时间接近翻倍。",
     "蛇形顺序减少空移": "让相邻扫描行交替从左向右和从右向左绘制，减少鼠标在行间空移。",
     "横线往返补笔（更黑更慢）": "每条扫描横线完成后沿原路返回，可让填充更深，但绘制时间更长。关闭时，容易被识别为点击的短横线仍会自动沿原路返回一次以防空笔。",
     "绘制时最小化本窗口": "开始正式绘制时自动最小化工具窗口，结束后恢复，避免遮挡目标画布。",
@@ -351,8 +351,8 @@ class HeyTeaCupLabelDrawerGUI:
             ],
         )
 
-        self.section_contour = self._create_param_section(self.dynamic_param_frame, "黑白单线补笔")
-        self._add_checkbutton(self.section_contour, "单线反向补笔（防空笔，更慢）", self.contour_retrace_var, pady=(3, 9))
+        self.section_contour = self._create_param_section(self.dynamic_param_frame, "黑白轮廓补笔")
+        self._add_checkbutton(self.section_contour, "轮廓反向补笔（防空笔，更慢）", self.contour_retrace_var, pady=(3, 9))
 
         self.section_raster = self._create_param_section(self.dynamic_param_frame, "逐行扫描")
         self._add_entry_specs(
@@ -710,7 +710,7 @@ class HeyTeaCupLabelDrawerGUI:
                 self.section_path,
             ]
         else:
-            self.method_hint_var.set("适合 Logo/黑白图：按阈值提取黑白线条，再压成单条可绘制路径；预览显示实际鼠标轨迹。")
+            self.method_hint_var.set("适合 Logo/黑白图：提取黑白区域外轮廓。粗线会被描成外边缘，不适合作为中心线。")
             sections = [
                 self.section_binary,
                 self.section_path,
@@ -842,7 +842,6 @@ class HeyTeaCupLabelDrawerGUI:
                 "blur": 1,
                 "dark_as_line": True,
                 "keep_aspect": True,
-                "centerline_bridge_px": 1,
                 "epsilon": 1.2,
                 "min_path_len": 8.0,
                 "max_paths": 30000,
@@ -857,7 +856,7 @@ class HeyTeaCupLabelDrawerGUI:
                 "pen_up_pause": 0.020,
                 "between_strokes_pause": 0.012,
                 "centerline_retrace": False,
-                "contour_retrace": False,
+                "contour_retrace": True,
             },
         }.get(method, {})
 
