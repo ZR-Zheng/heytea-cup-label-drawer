@@ -74,14 +74,10 @@ def make_paths(original_image: Image.Image | None, c: DrawConfig, should_stop=No
         return make_raster_paths(gray, c, should_stop=should_stop)
 
     if c.method == "黑白轮廓(阈值)":
-        thresh_type = cv2.THRESH_BINARY_INV if c.dark_as_line else cv2.THRESH_BINARY
-        _, binary = cv2.threshold(gray, c.threshold, 255, thresh_type)
-        contours, _ = cv2.findContours(binary, cv2.RETR_LIST, cv2.CHAIN_APPROX_NONE)
-        debug = 255 - binary  # 预览中用黑线白底显示
+        return make_black_white_single_stroke_paths(gray, c)
     else:
         edges = cv2.Canny(gray, c.canny_low, c.canny_high)
         contours, _ = cv2.findContours(edges, cv2.RETR_LIST, cv2.CHAIN_APPROX_NONE)
-        debug = 255 - edges  # 黑线白底
 
     scored: list[tuple[float, np.ndarray]] = []
 
@@ -107,9 +103,25 @@ def make_paths(original_image: Image.Image | None, c: DrawConfig, should_stop=No
     # 先画较长路径，减少碎线优先级。
     scored.sort(key=lambda item: item[0], reverse=True)
     selected = [pts for _, pts in scored[: c.max_paths]]
-    paths = order_paths_greedy(selected, retrace=c.method == "黑白轮廓(阈值)" and c.contour_retrace)
+    paths = order_paths_greedy(selected)
+    debug = render_paths_preview(paths, gray.shape)
 
     return paths, debug
+
+def make_black_white_single_stroke_paths(gray: np.ndarray, c: DrawConfig) -> tuple[list[np.ndarray], np.ndarray]:
+    """黑白阈值模式：先提取线条区域，再只生成可绘制的单像素主干。"""
+    thresh_type = cv2.THRESH_BINARY_INV if c.dark_as_line else cv2.THRESH_BINARY
+    _, binary = cv2.threshold(gray, c.threshold, 255, thresh_type)
+
+    # binary 中 255 表示需要绘制的区域；转成黑线白底后复用中心线追踪，
+    # 避免把粗笔划的两侧边缘都当成独立鼠标路径。
+    line_gray = 255 - binary
+    centerline_config = DrawConfig(**{
+        **c.__dict__,
+        "dark_as_line": True,
+        "centerline_retrace": False,
+    })
+    return make_centerline_paths(line_gray, centerline_config)
 
 def make_centerline_paths(gray: np.ndarray, c: DrawConfig) -> tuple[list[np.ndarray], np.ndarray]:
     """中心线追踪：适合黑色线稿。
@@ -179,6 +191,16 @@ def make_centerline_paths(gray: np.ndarray, c: DrawConfig) -> tuple[list[np.ndar
         cv2.polylines(debug, [pts.reshape(-1, 1, 2)], isClosed=False, color=0, thickness=1)
 
     return paths, debug
+
+def render_paths_preview(paths: list[np.ndarray], shape: tuple[int, ...]) -> np.ndarray:
+    """把最终会绘制的路径渲染成预览图，而不是显示中间处理结果。"""
+    h, w = shape[:2]
+    debug = np.full((h, w), 255, dtype=np.uint8)
+    for pts in paths:
+        if pts is None or len(pts) < 2:
+            continue
+        cv2.polylines(debug, [pts.reshape(-1, 1, 2)], isClosed=False, color=0, thickness=1)
+    return debug
 
 def zhang_suen_thinning(binary: np.ndarray, max_iter: int = 120) -> np.ndarray:
     """Zhang-Suen 二值图细化算法，返回 0/1 骨架。"""

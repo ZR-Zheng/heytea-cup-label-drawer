@@ -1,5 +1,4 @@
 import unittest
-from unittest.mock import patch
 
 import numpy as np
 from PIL import Image, ImageDraw
@@ -101,22 +100,41 @@ class GreedyPathOrderingTests(unittest.TestCase):
         self.assertEqual([path[0].tolist() for path in ordered], [[1, 0], [4, 0], [90, 0]])
 
 
-class ContourRetraceTests(unittest.TestCase):
-    @patch("heytea_cup_label_drawer.processing.order_paths_greedy", wraps=order_paths_greedy)
-    def test_black_white_contour_orders_from_retraced_mouse_position(self, order_paths):
+class BlackWhiteThresholdTests(unittest.TestCase):
+    def test_black_white_threshold_reduces_thick_line_to_single_stroke(self):
         image, draw = blank_line_art()
-        draw.rectangle((20, 20, 80, 80), fill="black")
+        draw.line((10, 50, 90, 50), fill="black", width=11)
         config = DrawConfig(
             canvas_w=100,
             canvas_h=100,
             padding=0,
             method="黑白轮廓(阈值)",
-            contour_retrace=True,
+            threshold=150,
+            dark_as_line=True,
         )
 
-        make_paths(image, config)
+        paths, preview = make_paths(image, config)
 
-        self.assertTrue(order_paths.call_args.kwargs["retrace"])
+        self.assertEqual(len(paths), 1)
+        ys = np.flatnonzero((preview == 0).any(axis=1))
+        self.assertTrue(ys.size > 0)
+        self.assertLessEqual(int(ys.max() - ys.min()), 2)
+
+    def test_black_white_preview_shows_drawable_path_not_binary_area(self):
+        image, draw = blank_line_art()
+        draw.rectangle((20, 45, 80, 55), fill="black")
+        config = DrawConfig(
+            canvas_w=100,
+            canvas_h=100,
+            padding=0,
+            method="黑白轮廓(阈值)",
+            threshold=150,
+            dark_as_line=True,
+        )
+
+        _paths, preview = make_paths(image, config)
+
+        self.assertLess(int(np.count_nonzero(preview == 0)), 100)
 
 
 class RasterPathTests(unittest.TestCase):
