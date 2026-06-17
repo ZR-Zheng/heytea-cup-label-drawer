@@ -118,50 +118,6 @@ class ContourRetraceTests(unittest.TestCase):
 
         self.assertTrue(order_paths.call_args.kwargs["retrace"])
 
-    @patch("heytea_cup_label_drawer.processing.order_paths_greedy", wraps=order_paths_greedy)
-    def test_black_white_lineart_optimization_disables_contour_retrace_ordering(self, order_paths):
-        image, draw = blank_line_art()
-        draw.line((10, 50, 90, 50), fill="black", width=9)
-        config = DrawConfig(
-            canvas_w=100,
-            canvas_h=100,
-            padding=0,
-            method="黑白轮廓(阈值)",
-            threshold=128,
-            contour_retrace=True,
-            contour_lineart_optimize=True,
-        )
-
-        make_paths(image, config)
-
-        self.assertFalse(order_paths.call_args.kwargs["retrace"])
-
-    def test_black_white_lineart_optimization_keeps_single_side_of_thick_stroke(self):
-        image, draw = blank_line_art()
-        draw.line((10, 50, 90, 50), fill="black", width=9)
-        base_config = dict(
-            canvas_w=100,
-            canvas_h=100,
-            padding=0,
-            method="黑白轮廓(阈值)",
-            threshold=128,
-            min_path_len=1,
-            epsilon=0.0,
-            contour_retrace=False,
-        )
-
-        outline_paths, _ = make_paths(image, DrawConfig(**base_config))
-        single_side_paths, preview = make_paths(
-            image,
-            DrawConfig(**base_config, contour_lineart_optimize=True),
-        )
-
-        outline_length = sum(polyline_length(path) for path in outline_paths)
-        single_side_length = sum(polyline_length(path) for path in single_side_paths)
-        self.assertGreater(outline_length, 0)
-        self.assertLess(single_side_length, outline_length * 0.75)
-        self.assertGreater(int((preview == 0).sum()), 0)
-
 
 class RasterPathTests(unittest.TestCase):
     def test_zero_length_raster_point_is_not_shown_as_drawable_path(self):

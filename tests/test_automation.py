@@ -48,15 +48,6 @@ class PathRetraceTests(unittest.TestCase):
         self.assertTrue(should_retrace_path(enabled))
         self.assertFalse(should_retrace_path(disabled))
 
-    def test_black_white_lineart_optimization_disables_retrace(self):
-        config = DrawConfig(
-            method="黑白轮廓(阈值)",
-            contour_retrace=True,
-            contour_lineart_optimize=True,
-        )
-
-        self.assertFalse(should_retrace_path(config))
-
     def test_canny_does_not_use_contour_retrace_switch(self):
         config = DrawConfig(method="边缘线稿(Canny)", contour_retrace=True)
 

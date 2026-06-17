@@ -24,7 +24,7 @@ def should_retrace_path(c: DrawConfig) -> bool:
     }
     if c.method in centerline_methods:
         return c.centerline_retrace
-    return c.method == "黑白轮廓(阈值)" and c.contour_retrace and not c.contour_lineart_optimize
+    return c.method == "黑白轮廓(阈值)" and c.contour_retrace
 
 
 def draw_screen_polyline(c: DrawConfig, points: list[tuple[int, int]], stop_event, is_raster_line: bool = False):
