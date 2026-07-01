@@ -50,6 +50,7 @@ def make_work_image(original_image: Image.Image | None, c: DrawConfig) -> Image.
 def make_paths(original_image: Image.Image | None, c: DrawConfig, should_stop=None) -> tuple[list[np.ndarray], np.ndarray]:
     work_img = make_work_image(original_image, c)
     rgb = np.array(work_img)
+    rgb = apply_manual_image_adjustment(rgb, c)
     gray = cv2.cvtColor(rgb, cv2.COLOR_RGB2GRAY)
 
     if c.blur > 1:
@@ -57,6 +58,7 @@ def make_paths(original_image: Image.Image | None, c: DrawConfig, should_stop=No
         gray = cv2.GaussianBlur(gray, (k, k), 0)
 
     if c.method == "中心线追踪(线稿)":
+        gray = preprocess_lineart_gray(gray, c)
         return make_centerline_paths(gray, c)
 
     model_methods = {
@@ -67,19 +69,24 @@ def make_paths(original_image: Image.Image | None, c: DrawConfig, should_stop=No
     if c.method in model_methods:
         converter, model_path = model_methods[c.method]
         lineart = converter(rgb, model_path, c.anime2sketch_input_size, c.anime2sketch_device)
+        lineart = preprocess_lineart_gray(lineart, c)
         model_config = DrawConfig(**{**c.__dict__, "dark_as_line": True})
         return make_centerline_paths(lineart, model_config)
 
     if c.method == "逐行扫描(横向)":
+        gray = preprocess_lineart_gray(gray, c)
         return make_raster_paths(gray, c, should_stop=should_stop)
 
+    gray = preprocess_lineart_gray(gray, c)
     if c.method == "黑白轮廓(阈值)":
         thresh_type = cv2.THRESH_BINARY_INV if c.dark_as_line else cv2.THRESH_BINARY
-        _, binary = cv2.threshold(gray, c.threshold, 255, thresh_type)
+        _, binary = cv2.threshold(gray, effective_threshold(gray, c), 255, thresh_type)
+        binary = smooth_lineart_mask(binary, c)
         contours, _ = cv2.findContours(binary, cv2.RETR_LIST, cv2.CHAIN_APPROX_NONE)
         debug = 255 - binary  # 预览中用黑线白底显示
     else:
         edges = cv2.Canny(gray, c.canny_low, c.canny_high)
+        edges = smooth_lineart_mask(edges, c)
         contours, _ = cv2.findContours(edges, cv2.RETR_LIST, cv2.CHAIN_APPROX_NONE)
         debug = 255 - edges  # 黑线白底
 
@@ -111,6 +118,54 @@ def make_paths(original_image: Image.Image | None, c: DrawConfig, should_stop=No
 
     return paths, debug
 
+def apply_manual_image_adjustment(rgb: np.ndarray, c: DrawConfig) -> np.ndarray:
+    """Apply simple brightness/contrast adjustment before grayscale conversion or model inference."""
+    brightness = int(c.image_brightness)
+    contrast = int(c.image_contrast)
+    if brightness == 0 and contrast == 0:
+        return rgb
+
+    alpha = max(0.0, 1.0 + contrast / 100.0)
+    beta = brightness * 2.55
+    adjusted = rgb.astype(np.float32) * alpha + beta
+    return np.clip(adjusted, 0, 255).astype(np.uint8)
+
+
+def preprocess_lineart_gray(gray: np.ndarray, c: DrawConfig) -> np.ndarray:
+    """Apply optional line-art denoise and sharpening before extracting paths."""
+    out = gray.astype(np.uint8, copy=False)
+
+    if c.lineart_denoise > 0:
+        h = max(1, min(30, int(c.lineart_denoise) * 3))
+        out = cv2.fastNlMeansDenoising(out, None, h=h, templateWindowSize=7, searchWindowSize=21)
+
+    if c.lineart_sharpen > 0:
+        amount = min(5, int(c.lineart_sharpen)) * 0.25
+        blurred = cv2.GaussianBlur(out, (0, 0), sigmaX=1.0)
+        out = cv2.addWeighted(out, 1.0 + amount, blurred, -amount, 0)
+
+    return out
+
+
+def effective_threshold(gray: np.ndarray, c: DrawConfig) -> int:
+    if not c.use_otsu_threshold:
+        return int(c.threshold)
+
+    threshold, _ = cv2.threshold(gray.astype(np.uint8, copy=False), 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+    return int(round(threshold))
+
+
+def smooth_lineart_mask(mask_u8: np.ndarray, c: DrawConfig) -> np.ndarray:
+    """Smooth binary line-art edges while preserving the black-on-white preview contract."""
+    radius = int(c.lineart_smooth)
+    if radius <= 0:
+        return mask_u8
+
+    k = radius * 2 + 1
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (k, k))
+    return cv2.morphologyEx(mask_u8, cv2.MORPH_CLOSE, kernel, iterations=1)
+
+
 def make_centerline_paths(gray: np.ndarray, c: DrawConfig) -> tuple[list[np.ndarray], np.ndarray]:
     """中心线追踪：适合黑色线稿。
 
@@ -123,13 +178,15 @@ def make_centerline_paths(gray: np.ndarray, c: DrawConfig) -> tuple[list[np.ndar
 
     对鼠标绘制来说，最后一步比“遇到分叉就切段”的传统骨架追踪更稳定。
     """
+    threshold = effective_threshold(gray, c)
     if c.dark_as_line:
-        mask = gray < c.threshold
+        mask = gray < threshold
     else:
-        mask = gray > c.threshold
+        mask = gray > threshold
 
     mask_u8 = mask.astype(np.uint8) * 255
     mask_u8 = remove_small_components(mask_u8, min_area=3)
+    mask_u8 = smooth_lineart_mask(mask_u8, c)
     if c.centerline_bridge_px > 0:
         k = int(c.centerline_bridge_px) * 2 + 1
         kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (k, k))
@@ -600,10 +657,12 @@ def make_raster_paths(gray: np.ndarray, c: DrawConfig, should_stop=None) -> tupl
     每一行里连续的“线条像素”会被压缩成一段鼠标横拖路径。
     由于鼠标轨迹只有水平线，通常比复杂轮廓更稳定，也更不容易被画布丢笔。
     """
+    threshold = effective_threshold(gray, c)
     if c.dark_as_line:
-        mask = gray < c.threshold
+        mask = gray < threshold
     else:
-        mask = gray > c.threshold
+        mask = gray > threshold
+    mask = smooth_lineart_mask(mask.astype(np.uint8) * 255, c) > 0
 
     h, w = mask.shape[:2]
     debug = np.full((h, w), 255, dtype=np.uint8)

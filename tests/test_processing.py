@@ -6,10 +6,14 @@ from PIL import Image, ImageDraw
 
 from heytea_cup_label_drawer.config import ANILINES_MODELS_DIR, INFORMATIVE_DRAWINGS_MODELS_DIR, DrawConfig
 from heytea_cup_label_drawer.processing import (
+    apply_manual_image_adjustment,
+    effective_threshold,
     make_paths,
     make_raster_paths,
     order_paths_greedy,
     polyline_length,
+    preprocess_lineart_gray,
+    smooth_lineart_mask,
     trace_skeleton_paths,
     zhang_suen_thinning,
 )
@@ -136,6 +140,45 @@ class RasterPathTests(unittest.TestCase):
 
         self.assertEqual(paths, [])
         self.assertTrue(np.all(preview == 255))
+
+
+class LineArtTuningTests(unittest.TestCase):
+    def test_manual_image_adjustment_changes_brightness(self):
+        rgb = np.full((4, 4, 3), 100, dtype=np.uint8)
+        config = DrawConfig(image_brightness=10)
+
+        result = apply_manual_image_adjustment(rgb, config)
+
+        self.assertGreater(int(result.mean()), 100)
+
+    def test_effective_threshold_uses_otsu_when_enabled(self):
+        gray = np.vstack([
+            np.full((10, 20), 30, dtype=np.uint8),
+            np.full((10, 20), 220, dtype=np.uint8),
+        ])
+        config = DrawConfig(threshold=123, use_otsu_threshold=True)
+
+        threshold = effective_threshold(gray, config)
+
+        self.assertNotEqual(threshold, 123)
+
+    def test_preprocess_lineart_gray_keeps_shape_and_dtype(self):
+        gray = np.tile(np.arange(32, dtype=np.uint8), (32, 1))
+        config = DrawConfig(lineart_denoise=1, lineart_sharpen=2)
+
+        result = preprocess_lineart_gray(gray, config)
+
+        self.assertEqual(result.shape, gray.shape)
+        self.assertEqual(result.dtype, np.uint8)
+
+    def test_smooth_lineart_mask_removes_tiny_holes(self):
+        mask = np.full((9, 9), 255, dtype=np.uint8)
+        mask[4, 4] = 0
+        config = DrawConfig(lineart_smooth=1)
+
+        result = smooth_lineart_mask(mask, config)
+
+        self.assertEqual(int(result[4, 4]), 255)
 
 
 class ModelLineArtTests(unittest.TestCase):

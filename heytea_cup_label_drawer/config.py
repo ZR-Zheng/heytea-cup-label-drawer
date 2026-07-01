@@ -25,7 +25,13 @@ class DrawConfig:
     canny_low: int = 80
     canny_high: int = 160
     threshold: int = 210
+    use_otsu_threshold: bool = False
     blur: int = 0
+    image_brightness: int = 0
+    image_contrast: int = 0
+    lineart_sharpen: int = 0
+    lineart_denoise: int = 0
+    lineart_smooth: int = 0
     dark_as_line: bool = True
     keep_aspect: bool = True
     # 中心线模式：先做轻微闭合，再按端点方向桥接小断点。

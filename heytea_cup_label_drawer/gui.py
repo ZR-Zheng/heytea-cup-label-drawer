@@ -22,7 +22,7 @@ from .config import (
     MODELS_DIR,
     DrawConfig,
 )
-from .processing import flatten_image, make_paths
+from .processing import apply_manual_image_adjustment, flatten_image, make_paths, make_work_image
 
 
 PARAMETER_HELP = {
@@ -32,7 +32,13 @@ PARAMETER_HELP = {
     "高度 H": "可绘制画布的高度，单位为屏幕像素。记录右下角时会自动计算。",
     "绘图内边距": "在画布四周保留的空白像素。增大可避免笔画贴近边缘或超出画布。",
     "模糊强度": "预处理时使用的模糊核大小。可填 0、1、3、5、7 或 9；数值越大，细节越少、线条越平滑。",
+    "亮度调整": "在线稿提取前整体调亮或调暗图片，范围 -100~100。",
+    "对比度调整": "在线稿提取前增强或压低明暗反差，范围 -100~100。",
+    "锐化强度": "增强线稿明暗边界。建议 0~3；过高可能让噪点和锯齿也变明显。",
+    "降噪强度": "在提取路径前抑制灰度噪点。建议 0~5；过高可能吃掉很浅的细线。",
+    "平顺度": "对二值线稿做轻微平顺处理，减少毛边和小孔。建议 0~2；过高可能让相邻线条粘连。",
     "黑白阈值": "区分线条与背景的灰度界线，范围 0~255。值越大，更多较浅区域会被识别为深色线条。",
+    "Otsu 自动阈值": "根据当前图片灰度分布自动计算黑白阈值。启用后仍保留手动阈值，方便随时切回。",
     "断线连接像素": "尝试连接相距较近的断点。建议 1~2；过大可能把相邻线条错误连接。",
     "模型权重文件": "当前线稿处理方式使用的模型文件。导入后会按模型类型保存到 models 下的独立文件夹。",
     "模型输入尺寸": "送入线稿模型的正方形边长。推荐 512；越大细节越多，但处理更慢、占用内存更多。",
@@ -177,6 +183,8 @@ class HeyTeaCupLabelDrawerGUI:
         self.worker_thread: threading.Thread | None = None
         self.calib_top_left: tuple[int, int] | None = None
         self.parameter_tips: list[HoverTip] = []
+        self.auto_preview_after_id: str | None = None
+        self.suspend_auto_preview = False
         for spec in MODEL_METHODS.values():
             spec["dir"].mkdir(parents=True, exist_ok=True)
 
@@ -184,9 +192,10 @@ class HeyTeaCupLabelDrawerGUI:
         self.load_config(silent=True)
         self._sync_config_to_vars()
         self.refresh_anime2sketch_models(silent=True)
-        self.method_var.trace_add("write", lambda *_: self._update_param_visibility())
+        self.method_var.trace_add("write", lambda *_: self._on_method_changed())
+        self._bind_auto_preview_traces()
         self._update_param_visibility()
-        self._log("准备就绪。先选择图片并标定画布，再刷新预览。")
+        self._log("准备就绪。先选择图片并标定画布，调整参数会自动刷新预览。")
         self._log("紧急停止：把鼠标移到屏幕左上角，或点击顶部“停止”。")
 
     # ---------- UI ----------
@@ -285,6 +294,12 @@ class HeyTeaCupLabelDrawerGUI:
         self._add_labeled_entry(self.section_image_common, "模糊强度", self.blur_var)
         self._add_checkbutton(self.section_image_common, "保持图片比例并居中", self.keep_aspect_var, pady=(3, 9))
 
+        self.section_image_adjust = self._create_param_section(prepare_tab, "手动调整图像")
+        self.section_image_adjust.pack(fill=tk.X, pady=(0, 10))
+        self._add_labeled_slider(self.section_image_adjust, "亮度调整", self.image_brightness_var, -100, 100)
+        self._add_labeled_slider(self.section_image_adjust, "对比度调整", self.image_contrast_var, -100, 100)
+        ttk.Label(self.section_image_adjust, text="调整后会同步影响左侧预览、线稿提取、模型输入和最终绘制路径。", style="Hint.TLabel", wraplength=340).pack(anchor="w", padx=10, pady=(2, 9))
+
         method_group = ttk.LabelFrame(lineart_tab, text="处理方式")
         method_group.pack(fill=tk.X, pady=(0, 10))
         self.method_combo = ttk.Combobox(
@@ -311,8 +326,15 @@ class HeyTeaCupLabelDrawerGUI:
         self.dynamic_param_frame.pack(fill=tk.X)
 
         self.section_binary = self._create_param_section(self.dynamic_param_frame, "黑白提取")
-        self._add_labeled_entry(self.section_binary, "黑白阈值", self.threshold_var)
+        self._add_labeled_slider(self.section_binary, "黑白阈值", self.threshold_var, 0, 255)
+        self._add_checkbutton(self.section_binary, "Otsu 自动阈值", self.use_otsu_threshold_var, pady=(3, 0))
         self._add_checkbutton(self.section_binary, "深色区域作为线条", self.dark_as_line_var, pady=(3, 9))
+
+        self.section_lineart_tuning = self._create_param_section(self.dynamic_param_frame, "线稿优化")
+        self._add_labeled_slider(self.section_lineart_tuning, "锐化强度", self.lineart_sharpen_var, 0, 5)
+        self._add_labeled_slider(self.section_lineart_tuning, "降噪强度", self.lineart_denoise_var, 0, 10)
+        self._add_labeled_slider(self.section_lineart_tuning, "平顺度", self.lineart_smooth_var, 0, 5)
+        ttk.Label(self.section_lineart_tuning, text="建议从 0 开始小幅增加；处理过强会丢细节或粘线。", style="Hint.TLabel", wraplength=340).pack(anchor="w", padx=10, pady=(2, 9))
 
         self.section_centerline = self._create_param_section(self.dynamic_param_frame, "中心线追踪")
         self._add_labeled_entry(self.section_centerline, "断线连接像素", self.centerline_bridge_px_var)
@@ -446,12 +468,18 @@ class HeyTeaCupLabelDrawerGUI:
         self.canny_high_var = tk.StringVar()
         self.threshold_var = tk.StringVar()
         self.blur_var = tk.StringVar()
+        self.image_brightness_var = tk.StringVar()
+        self.image_contrast_var = tk.StringVar()
+        self.lineart_sharpen_var = tk.StringVar()
+        self.lineart_denoise_var = tk.StringVar()
+        self.lineart_smooth_var = tk.StringVar()
         self.centerline_bridge_px_var = tk.StringVar()
         self.anime2sketch_model_path_var = tk.StringVar()
         self.anime2sketch_model_choice_var = tk.StringVar()
         self.anime2sketch_input_size_var = tk.StringVar()
         self.anime2sketch_device_var = tk.StringVar()
         self.dark_as_line_var = tk.BooleanVar()
+        self.use_otsu_threshold_var = tk.BooleanVar()
         self.keep_aspect_var = tk.BooleanVar()
         self.epsilon_var = tk.StringVar()
         self.min_path_len_var = tk.StringVar()
@@ -618,6 +646,32 @@ class HeyTeaCupLabelDrawerGUI:
         ttk.Entry(row, textvariable=variable, width=12).pack(side=tk.LEFT, fill=tk.X, expand=True)
         return row
 
+    def _add_labeled_slider(self, parent, label: str, variable: tk.StringVar, from_: int, to: int):
+        row = ttk.Frame(parent)
+        row.pack(fill=tk.X, padx=10, pady=4)
+        label_widget = ttk.Label(row, text=label, width=15, style="Parameter.TLabel", cursor="question_arrow")
+        label_widget.pack(side=tk.LEFT)
+        self._add_parameter_tip(label_widget, label)
+
+        def _format_value(value):
+            variable.set(str(int(round(float(value)))))
+
+        scale = tk.Scale(
+            row,
+            from_=from_,
+            to=to,
+            orient=tk.HORIZONTAL,
+            variable=variable,
+            command=_format_value,
+            resolution=1,
+            showvalue=False,
+            highlightthickness=0,
+            bd=0,
+        )
+        scale.pack(side=tk.LEFT, fill=tk.X, expand=True)
+        ttk.Label(row, textvariable=variable, width=4, anchor="e", style="Value.TLabel").pack(side=tk.LEFT, padx=(6, 0))
+        return row
+
     def _add_model_path_entry(self, parent):
         row = ttk.Frame(parent)
         row.pack(fill=tk.X, padx=10, pady=3)
@@ -646,6 +700,7 @@ class HeyTeaCupLabelDrawerGUI:
             return
         method_sections = [
             self.section_binary,
+            self.section_lineart_tuning,
             self.section_centerline,
             self.section_anime2sketch,
             self.section_canny,
@@ -657,6 +712,57 @@ class HeyTeaCupLabelDrawerGUI:
             section.pack_forget()
         for section in sections:
             section.pack(fill=tk.X, pady=(0, 10))
+
+    def _bind_auto_preview_traces(self):
+        variables = [
+            self.canvas_w_var,
+            self.canvas_h_var,
+            self.padding_var,
+            self.canny_low_var,
+            self.canny_high_var,
+            self.threshold_var,
+            self.use_otsu_threshold_var,
+            self.blur_var,
+            self.image_brightness_var,
+            self.image_contrast_var,
+            self.lineart_sharpen_var,
+            self.lineart_denoise_var,
+            self.lineart_smooth_var,
+            self.centerline_bridge_px_var,
+            self.anime2sketch_model_path_var,
+            self.anime2sketch_input_size_var,
+            self.anime2sketch_device_var,
+            self.dark_as_line_var,
+            self.keep_aspect_var,
+            self.epsilon_var,
+            self.min_path_len_var,
+            self.max_paths_var,
+            self.point_step_var,
+            self.raster_row_step_var,
+            self.raster_min_run_var,
+            self.raster_gap_tolerance_var,
+            self.raster_extend_px_var,
+            self.raster_serpentine_var,
+        ]
+        for variable in variables:
+            variable.trace_add("write", lambda *_: self._schedule_auto_preview())
+
+    def _on_method_changed(self):
+        self._update_param_visibility()
+        self._schedule_auto_preview(delay_ms=650)
+
+    def _schedule_auto_preview(self, delay_ms: int = 450):
+        if self.suspend_auto_preview or self.original_image is None or self._is_worker_running():
+            return
+        if self.auto_preview_after_id is not None:
+            self.root.after_cancel(self.auto_preview_after_id)
+        self.auto_preview_after_id = self.root.after(delay_ms, self._run_auto_preview)
+
+    def _run_auto_preview(self):
+        self.auto_preview_after_id = None
+        if self.original_image is None or self._is_worker_running():
+            return
+        self.refresh_preview(show_missing=False, show_errors=False, log_result=False)
 
     def _update_param_visibility(self):
         """只显示当前处理方式真正会用到的参数，避免左侧功能区过长、误调无效参数。"""
@@ -670,6 +776,7 @@ class HeyTeaCupLabelDrawerGUI:
             self.method_hint_var.set("适合黑色线稿：提取黑线→细化骨架→方向桥接断点→分叉处按角度延续主干。不会描粗线外轮廓。")
             sections = [
                 self.section_binary,
+                self.section_lineart_tuning,
                 self.section_centerline,
                 self.section_path,
             ]
@@ -678,6 +785,7 @@ class HeyTeaCupLabelDrawerGUI:
             sections = [
                 self.section_anime2sketch,
                 self.section_binary,
+                self.section_lineart_tuning,
                 self.section_centerline,
                 self.section_path,
             ]
@@ -686,6 +794,7 @@ class HeyTeaCupLabelDrawerGUI:
             sections = [
                 self.section_anime2sketch,
                 self.section_binary,
+                self.section_lineart_tuning,
                 self.section_centerline,
                 self.section_path,
             ]
@@ -694,6 +803,7 @@ class HeyTeaCupLabelDrawerGUI:
             sections = [
                 self.section_anime2sketch,
                 self.section_binary,
+                self.section_lineart_tuning,
                 self.section_centerline,
                 self.section_path,
             ]
@@ -701,18 +811,21 @@ class HeyTeaCupLabelDrawerGUI:
             self.method_hint_var.set("适合填充感和抗断笔：二值化后从上到下画水平短线，轨迹规则但会有横纹。")
             sections = [
                 self.section_binary,
+                self.section_lineart_tuning,
                 self.section_raster,
             ]
         elif method == "边缘线稿(Canny)":
             self.method_hint_var.set("适合照片/复杂图：识别明暗边缘。黑色线稿通常不如中心线模式自然。")
             sections = [
                 self.section_canny,
+                self.section_lineart_tuning,
                 self.section_path,
             ]
         else:
             self.method_hint_var.set("适合 Logo/黑白图：提取黑白区域外轮廓。粗线会被描成外边缘，不适合作为中心线。")
             sections = [
                 self.section_binary,
+                self.section_lineart_tuning,
                 self.section_path,
                 self.section_contour,
             ]
@@ -722,10 +835,13 @@ class HeyTeaCupLabelDrawerGUI:
     def reset_current_mode_defaults(self):
         """恢复当前处理方式的推荐默认值，不改变画布坐标和已选图片。"""
         method = self.method_var.get() or "中心线追踪(线稿)"
-        defaults = {
+        mode_defaults = {
             "中心线追踪(线稿)": {
                 "threshold": 210,
                 "blur": 0,
+                "lineart_sharpen": 0,
+                "lineart_denoise": 0,
+                "lineart_smooth": 0,
                 "dark_as_line": True,
                 "keep_aspect": True,
                 "centerline_bridge_px": 2,
@@ -747,6 +863,9 @@ class HeyTeaCupLabelDrawerGUI:
             "动漫线稿(Anime2Sketch)": {
                 "threshold": 210,
                 "blur": 0,
+                "lineart_sharpen": 0,
+                "lineart_denoise": 0,
+                "lineart_smooth": 0,
                 "dark_as_line": True,
                 "keep_aspect": True,
                 "anime2sketch_input_size": 512,
@@ -770,6 +889,9 @@ class HeyTeaCupLabelDrawerGUI:
             "动漫精细线稿(AniLines)": {
                 "threshold": 210,
                 "blur": 0,
+                "lineart_sharpen": 0,
+                "lineart_denoise": 0,
+                "lineart_smooth": 0,
                 "dark_as_line": True,
                 "keep_aspect": True,
                 "anime2sketch_input_size": 512,
@@ -784,6 +906,9 @@ class HeyTeaCupLabelDrawerGUI:
             "通用语义线稿(Informative Drawings)": {
                 "threshold": 215,
                 "blur": 0,
+                "lineart_sharpen": 0,
+                "lineart_denoise": 0,
+                "lineart_smooth": 0,
                 "dark_as_line": True,
                 "keep_aspect": True,
                 "anime2sketch_input_size": 512,
@@ -798,6 +923,9 @@ class HeyTeaCupLabelDrawerGUI:
             "逐行扫描(横向)": {
                 "threshold": 150,
                 "blur": 1,
+                "lineart_sharpen": 0,
+                "lineart_denoise": 0,
+                "lineart_smooth": 0,
                 "dark_as_line": True,
                 "keep_aspect": True,
                 "raster_row_step": 2,
@@ -821,6 +949,9 @@ class HeyTeaCupLabelDrawerGUI:
                 "canny_low": 80,
                 "canny_high": 160,
                 "blur": 3,
+                "lineart_sharpen": 0,
+                "lineart_denoise": 0,
+                "lineart_smooth": 0,
                 "keep_aspect": True,
                 "epsilon": 1.2,
                 "min_path_len": 10.0,
@@ -840,6 +971,9 @@ class HeyTeaCupLabelDrawerGUI:
             "黑白轮廓(阈值)": {
                 "threshold": 150,
                 "blur": 1,
+                "lineart_sharpen": 0,
+                "lineart_denoise": 0,
+                "lineart_smooth": 0,
                 "dark_as_line": True,
                 "keep_aspect": True,
                 "epsilon": 1.2,
@@ -859,6 +993,12 @@ class HeyTeaCupLabelDrawerGUI:
                 "contour_retrace": True,
             },
         }.get(method, {})
+        defaults = {
+            "use_otsu_threshold": False,
+            "image_brightness": 0,
+            "image_contrast": 0,
+            **mode_defaults,
+        }
 
         # 先把当前界面值同步到 config，保留画布坐标等非绘图参数；若界面里有非法数字，则仍尽力只重置参数。
         try:
@@ -882,49 +1022,59 @@ class HeyTeaCupLabelDrawerGUI:
     # ---------- 配置 ----------
     def _sync_config_to_vars(self):
         c = self.config
-        self.canvas_x_var.set(str(c.canvas_x))
-        self.canvas_y_var.set(str(c.canvas_y))
-        self.canvas_w_var.set(str(c.canvas_w))
-        self.canvas_h_var.set(str(c.canvas_h))
-        self.padding_var.set(str(c.padding))
+        self.suspend_auto_preview = True
+        try:
+            self.canvas_x_var.set(str(c.canvas_x))
+            self.canvas_y_var.set(str(c.canvas_y))
+            self.canvas_w_var.set(str(c.canvas_w))
+            self.canvas_h_var.set(str(c.canvas_h))
+            self.padding_var.set(str(c.padding))
 
-        self.method_var.set(c.method)
-        self.canny_low_var.set(str(c.canny_low))
-        self.canny_high_var.set(str(c.canny_high))
-        self.threshold_var.set(str(c.threshold))
-        self.blur_var.set(str(c.blur))
-        self.centerline_bridge_px_var.set(str(c.centerline_bridge_px))
-        active_model_path = self._model_path_for_method(c.method)
-        self.anime2sketch_model_path_var.set(active_model_path)
-        self._set_anime2sketch_model_choice(active_model_path)
-        self.anime2sketch_input_size_var.set(str(c.anime2sketch_input_size))
-        self.anime2sketch_device_var.set(c.anime2sketch_device)
-        self.dark_as_line_var.set(c.dark_as_line)
-        self.keep_aspect_var.set(c.keep_aspect)
-        self.epsilon_var.set(str(c.epsilon))
-        self.min_path_len_var.set(str(c.min_path_len))
-        self.max_paths_var.set(str(c.max_paths))
-        self.point_step_var.set(str(c.point_step))
-        self.raster_row_step_var.set(str(c.raster_row_step))
-        self.raster_min_run_var.set(str(c.raster_min_run))
-        self.raster_gap_tolerance_var.set(str(c.raster_gap_tolerance))
-        self.raster_extend_px_var.set(str(c.raster_extend_px))
-        self.raster_serpentine_var.set(c.raster_serpentine)
-        self.mouse_step_px_var.set(str(c.mouse_step_px))
-        self.min_stroke_duration_var.set(str(c.min_stroke_duration))
-        self.stroke_duration_per_100px_var.set(str(c.stroke_duration_per_100px))
-        self.pre_down_pause_var.set(str(c.pre_down_pause))
-        self.pen_down_pause_var.set(str(c.pen_down_pause))
-        self.pen_down_nudge_px_var.set(str(c.pen_down_nudge_px))
-        self.pen_up_pause_var.set(str(c.pen_up_pause))
-        self.between_strokes_pause_var.set(str(c.between_strokes_pause))
-        self.centerline_retrace_var.set(c.centerline_retrace)
-        self.contour_retrace_var.set(c.contour_retrace)
-        self.raster_backtrack_var.set(c.raster_backtrack)
-        self.move_duration_var.set(str(c.move_duration))
-        self.start_delay_var.set(str(c.start_delay))
-        self.test_padding_var.set(str(c.test_padding))
-        self.minimize_var.set(c.minimize_when_drawing)
+            self.method_var.set(c.method)
+            self.canny_low_var.set(str(c.canny_low))
+            self.canny_high_var.set(str(c.canny_high))
+            self.threshold_var.set(str(c.threshold))
+            self.use_otsu_threshold_var.set(c.use_otsu_threshold)
+            self.blur_var.set(str(c.blur))
+            self.image_brightness_var.set(str(c.image_brightness))
+            self.image_contrast_var.set(str(c.image_contrast))
+            self.lineart_sharpen_var.set(str(c.lineart_sharpen))
+            self.lineart_denoise_var.set(str(c.lineart_denoise))
+            self.lineart_smooth_var.set(str(c.lineart_smooth))
+            self.centerline_bridge_px_var.set(str(c.centerline_bridge_px))
+            active_model_path = self._model_path_for_method(c.method)
+            self.anime2sketch_model_path_var.set(active_model_path)
+            self._set_anime2sketch_model_choice(active_model_path)
+            self.anime2sketch_input_size_var.set(str(c.anime2sketch_input_size))
+            self.anime2sketch_device_var.set(c.anime2sketch_device)
+            self.dark_as_line_var.set(c.dark_as_line)
+            self.keep_aspect_var.set(c.keep_aspect)
+            self.epsilon_var.set(str(c.epsilon))
+            self.min_path_len_var.set(str(c.min_path_len))
+            self.max_paths_var.set(str(c.max_paths))
+            self.point_step_var.set(str(c.point_step))
+            self.raster_row_step_var.set(str(c.raster_row_step))
+            self.raster_min_run_var.set(str(c.raster_min_run))
+            self.raster_gap_tolerance_var.set(str(c.raster_gap_tolerance))
+            self.raster_extend_px_var.set(str(c.raster_extend_px))
+            self.raster_serpentine_var.set(c.raster_serpentine)
+            self.mouse_step_px_var.set(str(c.mouse_step_px))
+            self.min_stroke_duration_var.set(str(c.min_stroke_duration))
+            self.stroke_duration_per_100px_var.set(str(c.stroke_duration_per_100px))
+            self.pre_down_pause_var.set(str(c.pre_down_pause))
+            self.pen_down_pause_var.set(str(c.pen_down_pause))
+            self.pen_down_nudge_px_var.set(str(c.pen_down_nudge_px))
+            self.pen_up_pause_var.set(str(c.pen_up_pause))
+            self.between_strokes_pause_var.set(str(c.between_strokes_pause))
+            self.centerline_retrace_var.set(c.centerline_retrace)
+            self.contour_retrace_var.set(c.contour_retrace)
+            self.raster_backtrack_var.set(c.raster_backtrack)
+            self.move_duration_var.set(str(c.move_duration))
+            self.start_delay_var.set(str(c.start_delay))
+            self.test_padding_var.set(str(c.test_padding))
+            self.minimize_var.set(c.minimize_when_drawing)
+        finally:
+            self.suspend_auto_preview = False
 
     def _sync_vars_to_config(self) -> DrawConfig:
         active_model_field = self._model_field_for_method(self.method_var.get())
@@ -947,7 +1097,13 @@ class HeyTeaCupLabelDrawerGUI:
                 canny_low=int(float(self.canny_low_var.get())),
                 canny_high=int(float(self.canny_high_var.get())),
                 threshold=int(float(self.threshold_var.get())),
+                use_otsu_threshold=bool(self.use_otsu_threshold_var.get()),
                 blur=int(float(self.blur_var.get())),
+                image_brightness=int(float(self.image_brightness_var.get())),
+                image_contrast=int(float(self.image_contrast_var.get())),
+                lineart_sharpen=max(0, int(float(self.lineart_sharpen_var.get()))),
+                lineart_denoise=max(0, int(float(self.lineart_denoise_var.get()))),
+                lineart_smooth=max(0, int(float(self.lineart_smooth_var.get()))),
                 centerline_bridge_px=max(0, int(float(self.centerline_bridge_px_var.get()))),
                 anime2sketch_model_path=model_paths["anime2sketch_model_path"],
                 anilines_model_path=model_paths["anilines_model_path"],
@@ -993,6 +1149,16 @@ class HeyTeaCupLabelDrawerGUI:
             raise ValueError("Canny 低阈值必须小于高阈值。")
         if c.blur not in (0, 1, 3, 5, 7, 9):
             raise ValueError("模糊强度建议填写 0、1、3、5、7 或 9。")
+        if not (-100 <= c.image_brightness <= 100):
+            raise ValueError("亮度调整应在 -100 到 100 之间。")
+        if not (-100 <= c.image_contrast <= 100):
+            raise ValueError("对比度调整应在 -100 到 100 之间。")
+        if c.lineart_sharpen > 5:
+            raise ValueError("锐化强度建议在 0 到 5 之间。")
+        if c.lineart_denoise > 10:
+            raise ValueError("降噪强度建议在 0 到 10 之间。")
+        if c.lineart_smooth > 5:
+            raise ValueError("平顺度建议在 0 到 5 之间。")
         if not (0 <= c.threshold <= 255):
             raise ValueError("黑白阈值应在 0 到 255 之间。")
         if c.centerline_bridge_px > 5:
@@ -1231,9 +1397,13 @@ class HeyTeaCupLabelDrawerGUI:
         except Exception as e:
             messagebox.showerror("图片读取失败", str(e))
 
-    def refresh_preview(self):
+    def refresh_preview(self, show_missing: bool = True, show_errors: bool = True, log_result: bool = True):
+        if show_missing and self.auto_preview_after_id is not None:
+            self.root.after_cancel(self.auto_preview_after_id)
+            self.auto_preview_after_id = None
         if self.original_image is None:
-            messagebox.showinfo("提示", "请先选择图片。")
+            if show_missing:
+                messagebox.showinfo("提示", "请先选择图片。")
             return
         try:
             c = self._sync_vars_to_config()
@@ -1244,21 +1414,26 @@ class HeyTeaCupLabelDrawerGUI:
 
             self._show_original_preview()
             self._show_processed_preview(debug_img)
-            if c.method == "逐行扫描(横向)":
-                self._log(f"扫描路径已生成：{len(paths)} 条横线。断笔优先调慢：每100px绘制秒数/每笔最短秒数；太慢再增大扫描行距。")
-            elif c.method in MODEL_METHODS:
-                self._log(f"{MODEL_METHODS[c.method]['name']} 线稿已生成：{len(paths)} 条主干路径。细节过多时可提高最短路径长度或降低最多路径数。")
-            elif c.method == "中心线追踪(线稿)":
-                self._log(f"中心线已生成：{len(paths)} 条主干路径。若仍断笔，先把断线连接像素调到 2~3；若粘连，降到 1 或降低阈值。")
-            else:
-                self._log(f"线稿已生成：{len(paths)} 条路径。路径太多时可提高 epsilon、最短路径长度或降低最多路径数。")
+            if log_result:
+                if c.method == "逐行扫描(横向)":
+                    self._log(f"扫描路径已生成：{len(paths)} 条横线。断笔优先调慢：每100px绘制秒数/每笔最短秒数；太慢再增大扫描行距。")
+                elif c.method in MODEL_METHODS:
+                    self._log(f"{MODEL_METHODS[c.method]['name']} 线稿已生成：{len(paths)} 条主干路径。细节过多时可提高最短路径长度或降低最多路径数。")
+                elif c.method == "中心线追踪(线稿)":
+                    self._log(f"中心线已生成：{len(paths)} 条主干路径。若仍断笔，先把断线连接像素调到 2~3；若粘连，降到 1 或降低阈值。")
+                else:
+                    self._log(f"线稿已生成：{len(paths)} 条路径。路径太多时可提高 epsilon、最短路径长度或降低最多路径数。")
         except Exception as e:
-            messagebox.showerror("预览失败", str(e))
+            if show_errors:
+                messagebox.showerror("预览失败", str(e))
+            else:
+                self.path_count_var.set("自动预览失败，请检查参数")
 
     def _show_original_preview(self):
         if self.original_image is None:
             return
-        img = self.original_image.copy()
+        img = make_work_image(self.original_image, self.config)
+        img = Image.fromarray(apply_manual_image_adjustment(np.array(img), self.config))
         img.thumbnail(self._preview_bounds(self.original_preview_label), Image.Resampling.LANCZOS)
         self.preview_photo = ImageTk.PhotoImage(img)
         self.original_preview_label.configure(image=self.preview_photo, text="")
